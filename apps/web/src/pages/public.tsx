@@ -59,7 +59,7 @@ export function PublicDiary() {
   );
 }
 
-/* ---------- Member micro-flow: availability + diary (member code) ---------- */
+/* ---------- Member micro-flow: availability + diary + bookings + reports ---------- */
 export function Microflow() {
   const params = new URLSearchParams(window.location.search);
   const [memberId, setMemberId] = useState(params.get('member') ?? '');
@@ -87,6 +87,18 @@ export function Microflow() {
           </div>
         )}
         {data?.error && <div className="card p-4">{data.error}</div>}
+        {(data?.bookings ?? []).length > 0 && (
+          <div className="card p-4 mb-2">
+            <div className="font-bold mb-1">My 1-2-1 bookings</div>
+            {(data.bookings ?? []).map((b: any) => <div key={b.id} className="text-sm">{new Date(b.starts_at).toLocaleString()} — {b.status}</div>)}
+          </div>
+        )}
+        {(data?.reports ?? []).length > 0 && (
+          <div className="card p-4 mb-2">
+            <div className="font-bold mb-1">Progress reports</div>
+            {(data.reports ?? []).map((r: any) => <div key={r.id} className="text-sm">{r.period} — sent {r.sent_at?.slice(0, 10)}</div>)}
+          </div>
+        )}
         {(data?.events ?? []).map((e: any) => {
           const entry = (data.entries ?? []).find((x: any) => x.event_id === e.id);
           return (
@@ -108,20 +120,67 @@ export function Microflow() {
 /* ---------- Phase 6: 1-2-1 booking (member code) ---------- */
 export function Booking12() {
   const [slots, setSlots] = useState<any[]>([]);
+  const [form, setForm] = useState({ memberId: '', code: '', slotId: '', date: '' });
+  const [mine, setMine] = useState<any[]>([]);
+  const [msg, setMsg] = useState('');
   useEffect(() => {
-    supabase.from('booking_slots').select('*,venues(name)').eq('status', 'open').then(({ data }) => setSlots(data ?? []));
+    supabase.from('booking_slots').select('*,venues(name),mentis_staff!booking_slots_coach_id_fkey(display_name)').eq('status', 'open').then(({ data }) => setSlots(data ?? []));
   }, []);
+  const book = async () => {
+    const slot = slots.find((s: any) => s.id === form.slotId);
+    if (!slot || !form.date) { setMsg('Pick a slot and date.'); return; }
+    const startsAt = new Date(`${form.date}T${String(slot.start_time).slice(0, 5)}:00Z`).toISOString();
+    if (new Date(startsAt).getUTCDay() !== slot.weekday) { setMsg('That date is not this slot\u2019s weekday.'); return; }
+    const r = await fetch(functionsUrl('booking-create'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: form.memberId, code: form.code, slotId: form.slotId, startsAt }) });
+    const j = await r.json();
+    setMsg(j.ok ? 'Booked! The coach will confirm.' : (j.error ?? 'Booking failed.'));
+    if (j.ok) myBookings();
+  };
+  const myBookings = async () => {
+    if (!form.memberId || !form.code) return;
+    const r = await fetch(`${functionsUrl('member-microflow')}?memberId=${form.memberId}&code=${form.code}`);
+    const j = await r.json();
+    setMine(j.bookings ?? []);
+  };
+  const cancel = async (bookingId: string) => {
+    const r = await fetch(functionsUrl('booking-create'), { method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookingId, memberId: form.memberId, code: form.code }) });
+    const j = await r.json();
+    setMsg(j.ok ? 'Cancelled.' : (j.error ?? 'Cancel failed.'));
+    myBookings();
+  };
   return (
     <div className="dark p-4" style={{ minHeight: '100vh' }}>
       <div style={{ maxWidth: 640, margin: '0 auto' }}>
         <h1 className="text-2xl font-black mb-4">Book a 1-2-1</h1>
         {slots.map((s: any) => (
           <div key={s.id} className="card p-4 mb-2">
-            <div className="font-bold">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.weekday]} {s.start_time} · {s.duration_minutes} min · {s.venues?.name}</div>
+            <div className="font-bold">{s.mentis_staff?.display_name} — {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.weekday]} {s.start_time} · {s.duration_minutes} min · {s.venues?.name}</div>
             <div className="text-sm" style={{ color: 'var(--muted)' }}>£{(s.fixed_price_cents / 100).toFixed(2)} fixed · 24h cancellation window</div>
           </div>
         ))}
         {slots.length === 0 && <div className="card p-4">No open slots right now.</div>}
+        <div className="card p-4 mt-4 flex flex-col gap-2">
+          <h3 className="font-bold">Book with your member code</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <input className="input" placeholder="Member ID" value={form.memberId} onChange={(e) => setForm({ ...form, memberId: e.target.value })} />
+            <input className="input" placeholder="Member code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+            <select className="input" value={form.slotId} onChange={(e) => setForm({ ...form, slotId: e.target.value })}>
+              <option value="">Slot…</option>{slots.map((s: any) => <option key={s.id} value={s.id}>{s.mentis_staff?.display_name} {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.weekday]} {s.start_time}</option>)}
+            </select>
+            <input type="date" className="input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+          </div>
+          <div className="flex gap-2">
+            <button className="btn btn-primary" onClick={book}>Book</button>
+            <button className="btn btn-ghost" onClick={myBookings}>My bookings</button>
+          </div>
+          {msg && <p className="text-sm">{msg}</p>}
+          {mine.map((b: any) => (
+            <div key={b.id} className="text-sm flex justify-between"><span>{new Date(b.starts_at).toLocaleString()} — {b.status}</span>
+              {b.status === 'booked' && <button className="btn btn-ghost" onClick={() => cancel(b.id)}>Cancel</button>}</div>
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -7,8 +7,18 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
   const go = async () => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     setErr(error?.message ?? '');
+    if (!error && data.user) {
+      // Register this install for session oversight (Devices page can revoke).
+      const { data: dev } = await supabase.from('devices').select('id')
+        .eq('user_id', data.user.id).eq('label', 'Mentis mobile').eq('revoked', false).limit(1);
+      if (!dev?.length) {
+        await supabase.from('devices').insert({ user_id: data.user.id, label: 'Mentis mobile', last_seen: new Date().toISOString() });
+      } else {
+        await supabase.from('devices').update({ last_seen: new Date().toISOString() }).eq('id', dev[0].id);
+      }
+    }
   };
   return (
     <View style={{ flex: 1, justifyContent: 'center', padding: 24, backgroundColor: '#0b1f3a' }}>

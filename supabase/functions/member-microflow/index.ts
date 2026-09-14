@@ -20,7 +20,9 @@ Deno.serve(async (req) => {
       .eq('organization_id', member.organization_id).eq('status', 'published')
       .gte('ends_on', new Date().toISOString().slice(0, 10)).order('starts_on');
     const { data: entries } = await supabase.from('event_entries').select('event_id,status').eq('member_id', memberId);
-    return Response.json({ member, events: events ?? [], entries: entries ?? [] }, { headers: cors });
+    const { data: bookings } = await supabase.from('bookings').select('id,starts_at,status,slot_id').eq('member_id', memberId).neq('status', 'cancelled').order('starts_at');
+    const { data: reports } = await supabase.from('progress_reports').select('id,period,status,sent_at').eq('member_id', memberId).eq('status', 'sent').order('period', { ascending: false });
+    return Response.json({ member, events: events ?? [], entries: entries ?? [], bookings: bookings ?? [], reports: reports ?? [] }, { headers: cors });
   }
   if (req.method === 'POST') {
     const { memberId, code, eventId, status } = await req.json();

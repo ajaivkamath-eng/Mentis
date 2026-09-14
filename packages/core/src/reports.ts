@@ -1,7 +1,7 @@
 /* Reporting: Member 360 aggregates, coach hours, match analytics, dashboards. */
 import type { AttendanceRecord, MatchRecord, TimeEntry } from './domain.js';
 import { money } from './billing.js';
-import { winLoss, matchForm } from './competition.js';
+import { winLoss, matchForm, ratingTrend, rankMovement } from './competition.js';
 
 export function attendancePct(records: AttendanceRecord[]): number {
   if (!records.length) return 0;
@@ -68,4 +68,34 @@ export function gbp(cents: number): string {
 }
 export function earningFor(hours: number, rateCents: number): string {
   return gbp(money(hours, rateCents));
+}
+
+/* Phase 6 — termly progress report content (rule 31: coach approves first). */
+export interface ProgressInput {
+  attendance: AttendanceRecord[];
+  ratingSeries: Record<string, { at: string; score: number }[]>;
+  rankingsByPlatform: Record<string, { source: string; value: number; asOfDate: string }[]>;
+  matches: MatchRecord[];
+  goals: { status: string }[];
+}
+export interface ProgressSummary {
+  attendancePct: number;
+  ratingTrends: Record<string, 'up' | 'down' | 'flat'>;
+  rankMovement: Record<string, 'up' | 'down' | 'same' | 'unknown'>;
+  winLoss: { wins: number; losses: number; draws: number };
+  form: ('W' | 'L' | 'D')[];
+  goals: Record<string, number>;
+}
+export function buildProgressSummary(input: ProgressInput): ProgressSummary {
+  const ratingTrends: ProgressSummary['ratingTrends'] = {};
+  for (const [k, v] of Object.entries(input.ratingSeries)) ratingTrends[k] = ratingTrend(v);
+  const rankMovementOut: ProgressSummary['rankMovement'] = {};
+  for (const [k, v] of Object.entries(input.rankingsByPlatform)) rankMovementOut[k] = rankMovement(v);
+  const goals: Record<string, number> = {};
+  for (const g of input.goals) goals[g.status] = (goals[g.status] ?? 0) + 1;
+  return {
+    attendancePct: attendancePct(input.attendance),
+    ratingTrends, rankMovement: rankMovementOut,
+    winLoss: winLoss(input.matches), form: matchForm(input.matches), goals,
+  };
 }

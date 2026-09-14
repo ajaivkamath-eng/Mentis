@@ -130,6 +130,16 @@ export function Tasters() {
     const { data: c } = await supabase.from('customers').insert({ organization_id: staff?.organization_id, name: `${t.name} (guardian)`, phone: t.contact }).select('id').single();
     if (c) await supabase.from('members').insert({ organization_id: staff?.organization_id, customer_id: c.id, name: t.name, date_of_birth: '2015-01-01' });
     await supabase.from('prospects').update({ status: 'converted' }).eq('id', t.id);
+    // Conversion pack: welcome email + equipment guide (SportProfile content).
+    const { data: sport } = await supabase.from('sport_profiles').select('equipment_guide').limit(1).single();
+    if (t.contact && t.contact.includes('@')) {
+      await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organizationId: staff?.organization_id, to: t.contact, subject: 'Welcome to Kingfisher TTC',
+          body: `Hi ${t.name}! Welcome to Kingfisher Table Tennis Club. Your coach will confirm your first session shortly. Equipment: ${sport?.equipment_guide ?? 'racket, indoor shoes, sportswear, water bottle.'}`,
+          template: 'welcomePack', kind: 'invitation',
+        }) });
+    }
     load();
   };
   const formUrl = `${window.location.origin}/taster?org=${staff?.organization_id ?? ''}`;
