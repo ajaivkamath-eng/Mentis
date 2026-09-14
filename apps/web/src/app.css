@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+/* Mentis shared design tokens — dark + light, mirrored on mobile. */
+:root {
+  --mentis-navy: #0b1f3a;
+  --mentis-teal: #14b8a6;
+  --mentis-gold: #f59e0b;
+  --green: #16a34a;
+  --amber: #f59e0b;
+  --red: #dc2626;
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+}
+.dark {
+  --bg: #0b1220;
+  --surface: #111c33;
+  --ink: #e2e8f0;
+  --muted: #94a3b8;
+  --line: #1e293b;
+}
+html, body { background: var(--bg); color: var(--ink); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 0.9rem; }
+.btn { display: inline-flex; align-items: center; gap: 0.5rem; border-radius: 0.65rem; padding: 0.55rem 1rem; font-weight: 600; }
+.btn-primary { background: var(--mentis-navy); color: #fff; }
+.dark .btn-primary { background: var(--mentis-teal); color: #062a27; }
+.btn-ghost { border: 1px solid var(--line); }
+.input { background: var(--surface); border: 1px solid var(--line); border-radius: 0.65rem; padding: 0.55rem 0.8rem; width: 100%; }
+.badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.75rem; font-weight: 700; }
+.navlink { display: flex; align-items: center; gap: 0.65rem; padding: 0.5rem 0.75rem; border-radius: 0.6rem; color: var(--muted); font-weight: 600; }
+.navlink.active, .navlink:hover { background: var(--line); color: var(--ink); }
+table.grid { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.grid th, table.grid td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--line); }
+.dot-green { background: var(--green); } .dot-amber { background: var(--amber); } .dot-red { background: var(--red); }
