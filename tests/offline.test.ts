@@ -1,0 +1,4 @@
+import {describe,it,expect} from 'vitest';
+import {createRegister,cycleAttendance,markAllPresent,undoLast,mergeAttendance} from '@mentis/core';
+const base=(id:string,status:any='absent')=>({id,sessionInstanceId:'s',memberId:id,status,recordedAt:'2026-01-01T10:00:00Z',recordedBy:'c',offline:false});
+describe('offline attendance register',()=>{it('cycles present to absent and queues sync',()=>{const s=cycleAttendance(createRegister([base('m','present')]),'m','2026-01-01T11:00:00Z');expect(s.records.m.status).toBe('absent');expect(s.queue).toHaveLength(1);});it('marks all present and supports undo',()=>{const s=markAllPresent(createRegister([base('a'),base('b')]),['a','b']);expect(Object.values(s.records).every(r=>r.status==='present')).toBe(true);expect(undoLast(s).records.a.status).toBe('absent');});it('uses latest timestamp on conflict',()=>expect(mergeAttendance(base('m','present'),base('m','absent')).status).toBe('present'));});

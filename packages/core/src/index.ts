@@ -5,3 +5,4 @@ export * from './scheduling.js';
 export * from './generator.js';
 export * from './overrides.js';
 export * from './timesheet.js';
+export * from './offline.js';
