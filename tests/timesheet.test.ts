@@ -1,0 +1,3 @@
+import {describe,it,expect} from 'vitest'; import {adjustTimeEntry,approveTimeIncrease} from '@mentis/core';
+const e={id:'1',staffId:'s',date:'2026-01-01',start:'',end:'',hours:2,rateCents:100,billable:true,billState:'unbilled' as const,pendingReview:false};
+describe('timesheet guardrail',()=>{it('requires review when hours increase',()=>expect(adjustTimeEntry(e,3).pendingReview).toBe(true));it('allows decreases immediately',()=>expect(adjustTimeEntry(e,1).pendingReview).toBe(false));it('clears review after approval',()=>expect(approveTimeIncrease(adjustTimeEntry(e,3)).pendingReview).toBe(false));});
