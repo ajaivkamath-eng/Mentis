@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Mentis",
+    "slug": "mentis",
+    "scheme": "mentis",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-local-authentication",
+      [
+        "react-native-onesignal",
+        { "mode": "production" }
+      ]
+    ],
+    "ios": { "bundleIdentifier": "com.kingfishertabletennisclub.mentis" },
+    "android": { "package": "com.kingfishertabletennisclub.mentis" },
+    "extra": {
+      "router": {},
+      "supabaseUrl": "https://project.supabase.co",
+      "supabaseAnonKey": "anon-key",
+      "oneSignalAppId": "onesignal-app-id"
+    }
+  }
+}

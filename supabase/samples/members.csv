@@ -1,0 +1,4 @@
+name,dateOfBirth,customerName,customerPhone,nokName,nokPhone,tteNumber,handedness,playingStyle
+Amy Chen,2015-03-12,Li Chen,07700 900001,Li Chen,07700 900001,,R,Attacker
+Ben Okafor,2014-07-22,Ngozi Okafor,07700 900002,Ngozi Okafor,07700 900002,TTE-12345,L,All-round
+Invalid Row,,No Phone,,,,

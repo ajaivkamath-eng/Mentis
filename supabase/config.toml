@@ -1,0 +1,26 @@
+# Mentis Supabase project config — SAME project as Rally (shared user pool).
+# EU region required (UK children's data stays in-region, rule 26).
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+
+[functions.send-email]
+enabled = true
+[functions.taster-form]
+enabled = true
+verify_jwt = false
+[functions.diary-public]
+enabled = true
+verify_jwt = false
+[functions.member-microflow]
+enabled = true
+verify_jwt = false
+[functions.breach-eval]
+enabled = true
+[functions.monthly-summary]
+enabled = true
+[functions.task-reminders]
+enabled = true
