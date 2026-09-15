@@ -8,11 +8,11 @@ export function Venues() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [form, setForm] = useState({ name: '', address: '', phone: '', capacity: '', concurrent_session_limit: 1, notes: '' });
-  const load = () => supabase.from('venues').select('*').order('name').then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_venues').select('*').order('name').then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const save = async () => {
     if (!form.name.trim()) return;
-    await supabase.from('venues').insert({
+    await supabase.from('mentis_venues').insert({
       organization_id: staff?.organization_id, name: form.name, address: form.address || null,
       phone: form.phone || null, capacity: form.capacity ? Number(form.capacity) : null,
       concurrent_session_limit: form.concurrent_session_limit, notes: form.notes || null,
@@ -21,7 +21,7 @@ export function Venues() {
   };
   const remove = async (id: string) => {
     if (!confirm('Delete venue? Sessions must be moved first.')) return;
-    const { error } = await supabase.from('venues').delete().eq('id', id);
+    const { error } = await supabase.from('mentis_venues').delete().eq('id', id);
     if (error) alert(error.message); else load();
   };
   return (
@@ -53,13 +53,13 @@ export function Groups() {
   const [name, setName] = useState('');
   const [venueId, setVenueId] = useState('');
   const load = () => {
-    supabase.from('groups').select('*,venues(name)').then(({ data }) => setRows(data ?? []));
-    supabase.from('venues').select('id,name').then(({ data }) => setVenues(data ?? []));
+    supabase.from('mentis_groups').select('*,mentis_venues(name)').then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const save = async () => {
     if (!name.trim()) return;
-    await supabase.from('groups').insert({ organization_id: staff?.organization_id, name, venue_id: venueId || null });
+    await supabase.from('mentis_groups').insert({ organization_id: staff?.organization_id, name, venue_id: venueId || null });
     setName(''); load();
   };
   return (
@@ -84,13 +84,13 @@ export function RateCards() {
   const [staffList, setStaffList] = useState<any[]>([]);
   const [form, setForm] = useState({ staff_id: '', label: '', rate: '', valid_from: new Date().toISOString().slice(0, 10) });
   const load = () => {
-    supabase.from('rate_cards').select('*,mentis_staff(display_name)').order('valid_from', { ascending: false }).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_rate_cards').select('*,mentis_staff(display_name)').order('valid_from', { ascending: false }).then(({ data }) => setRows(data ?? []));
     supabase.from('mentis_staff').select('id,display_name').then(({ data }) => setStaffList(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const save = async () => {
     if (!form.staff_id || !form.label.trim() || !form.rate) return;
-    await supabase.from('rate_cards').insert({
+    await supabase.from('mentis_rate_cards').insert({
       organization_id: staff?.organization_id, staff_id: form.staff_id, label: form.label,
       rate_cents: Math.round(Number(form.rate) * 100), valid_from: form.valid_from,
     });
@@ -124,11 +124,11 @@ export function Holidays() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [form, setForm] = useState({ name: '', kind: 'manual', starts_on: '', ends_on: '' });
-  const load = () => supabase.from('holiday_calendar').select('*').order('starts_on').then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_holiday_calendar').select('*').order('starts_on').then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const save = async () => {
     if (!form.name.trim() || !form.starts_on || !form.ends_on) return;
-    await supabase.from('holiday_calendar').insert({ organization_id: staff?.organization_id, ...form });
+    await supabase.from('mentis_holiday_calendar').insert({ organization_id: staff?.organization_id, ...form });
     setForm({ ...form, name: '' }); load();
   };
   return (
@@ -157,26 +157,26 @@ export function Overrides() {
   const [form, setForm] = useState({ schedule_id: '', starts_at: '', ends_at: '', venue_id: '' });
   const [preview, setPreview] = useState<any[]>([]);
   const load = () => {
-    supabase.from('weekly_schedules').select('id,name').then(({ data }) => setSchedules(data ?? []));
-    supabase.from('venues').select('id,name').then(({ data }) => setVenues(data ?? []));
-    supabase.from('schedule_overrides').select('*').order('starts_at', { ascending: false }).limit(30).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_weekly_schedules').select('id,name').then(({ data }) => setSchedules(data ?? []));
+    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
+    supabase.from('mentis_schedule_overrides').select('*').order('starts_at', { ascending: false }).limit(30).then(({ data }) => setRows(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const doPreview = async () => {
     if (!form.schedule_id || !form.starts_at || !form.ends_at) return;
-    const { data } = await supabase.from('sessions').select('id,name,start_at,venues(name)')
+    const { data } = await supabase.from('mentis_sessions').select('id,name,start_at,mentis_venues(name)')
       .eq('schedule_id', form.schedule_id).gte('start_at', form.starts_at).lte('end_at', form.ends_at);
     setPreview(data ?? []);
   };
   const save = async () => {
     if (!preview.length) { alert('Preview first — overrides need affected instances.'); return; }
-    await supabase.from('schedule_overrides').insert({
+    await supabase.from('mentis_schedule_overrides').insert({
       organization_id: staff?.organization_id, schedule_id: form.schedule_id,
       starts_at: form.starts_at, ends_at: form.ends_at, venue_id: form.venue_id || null,
       original_values: {}, override_values: { venue_id: form.venue_id || null }, created_by: staff?.user_id,
     });
     if (form.venue_id) {
-      for (const p of preview) await supabase.from('sessions').update({ venue_id: form.venue_id }).eq('id', p.id);
+      for (const p of preview) await supabase.from('mentis_sessions').update({ venue_id: form.venue_id }).eq('id', p.id);
     }
     setPreview([]); load();
   };
@@ -210,10 +210,10 @@ export function Overrides() {
 /* ---------- Action-type timelines (all configurable, rule 10) ---------- */
 export function ActionTimelines() {
   const [rows, setRows] = useState<any[]>([]);
-  const load = () => supabase.from('action_types').select('*').order('name').then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_action_types').select('*').order('name').then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const save = async (t: any, field: string, days: string) => {
-    await supabase.from('action_types').update({ [field]: `${Number(days)} days` }).eq('id', t.id);
+    await supabase.from('mentis_action_types').update({ [field]: `${Number(days)} days` }).eq('id', t.id);
     load();
   };
   return (
@@ -240,10 +240,10 @@ function parseInterval(v: unknown): number {
 /* ---------- Devices: per-device revocation (rule 27) ---------- */
 export function Devices() {
   const [rows, setRows] = useState<any[]>([]);
-  const load = () => supabase.from('devices').select('*').order('last_seen', { ascending: false }).then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_devices').select('*').order('last_seen', { ascending: false }).then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const revoke = async (id: string, revoked: boolean) => {
-    await supabase.from('devices').update({ revoked: !revoked }).eq('id', id);
+    await supabase.from('mentis_devices').update({ revoked: !revoked }).eq('id', id);
     load();
   };
   return (
@@ -266,7 +266,7 @@ export function AuditViewer() {
   const [rows, setRows] = useState<any[]>([]);
   const [action, setAction] = useState('');
   useEffect(() => {
-    let q = supabase.from('audit_log').select('*').order('created_at', { ascending: false }).limit(100);
+    let q = supabase.from('mentis_audit_log').select('*').order('created_at', { ascending: false }).limit(100);
     if (action) q = q.eq('action', action);
     q.then(({ data }) => setRows(data ?? []));
   }, [action]);

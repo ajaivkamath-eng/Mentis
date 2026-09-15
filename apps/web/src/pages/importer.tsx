@@ -35,11 +35,11 @@ export function Importer() {
     if (kind === 'members') {
       const { valid } = validateMemberRows(rows);
       for (const r of valid) {
-        const { data: c } = await supabase.from('customers').insert({
+        const { data: c } = await supabase.from('mentis_customers').insert({
           organization_id: staff?.organization_id, name: r.customerName || `${r.name} (guardian)`, phone: r.customerPhone || null,
         }).select('id').single();
         if (c) {
-          await supabase.from('members').insert({
+          await supabase.from('mentis_members').insert({
             organization_id: staff?.organization_id, customer_id: c.id, name: r.name,
             date_of_birth: r.dateOfBirth, nok_name: r.nokName || null, nok_phone: r.nokPhone || null,
             tte_number: r.tteNumber || null, handedness: r.handedness || null, playing_style: r.playingStyle || null,
@@ -50,7 +50,7 @@ export function Importer() {
     } else if (kind === 'diary') {
       const { valid } = validateDiaryImport(rows as any);
       for (const r of valid) {
-        await supabase.from('events').insert({
+        await supabase.from('mentis_events').insert({
           organization_id: staff?.organization_id, name: r.name, starts_on: r.startsOn,
           ends_on: r.endsOn, location: r.location || null, source: r.source || 'manual',
           external_ref: r.externalRef || null, status: 'published',
@@ -61,9 +61,9 @@ export function Importer() {
       let n = 0;
       for (const r of rows) {
         if (!r.memberName || !r.opponent || !r.date) continue;
-        const { data: m } = await supabase.from('members').select('id').eq('name', r.memberName).limit(1).single();
+        const { data: m } = await supabase.from('mentis_members').select('id').eq('name', r.memberName).limit(1).single();
         if (!m) continue;
-        await supabase.from('matches').insert({
+        await supabase.from('mentis_matches').insert({
           member_id: m.id, played_on: r.date, session_id: r.sessionId || null, opponent: r.opponent,
           games_for: (r.gamesFor || '').split('-').map(Number).filter((x) => !Number.isNaN(x)),
           games_against: (r.gamesAgainst || '').split('-').map(Number).filter((x) => !Number.isNaN(x)),
@@ -76,9 +76,9 @@ export function Importer() {
       let n = 0;
       for (const r of rows) {
         if (!r.memberName || !r.platform || !r.rank || !r.asOf) continue;
-        const { data: m } = await supabase.from('members').select('id').eq('name', r.memberName).limit(1).single();
+        const { data: m } = await supabase.from('mentis_members').select('id').eq('name', r.memberName).limit(1).single();
         if (!m) continue;
-        await supabase.from('rankings').insert({
+        await supabase.from('mentis_rankings').insert({
           member_id: m.id, platform: r.platform, rank_value: Number(r.rank), as_of: r.asOf, source_ref: r.sourceRef || null,
         });
         n += 1;

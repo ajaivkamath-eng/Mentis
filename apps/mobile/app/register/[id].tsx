@@ -23,15 +23,15 @@ export default function Register() {
   useEffect(() => {
     (async () => {
       try {
-        const { data: enroll } = await supabase.from('enrollments')
-          .select('id,member_id,members(id,name,special_needs_flag,customers(name,phone))')
+        const { data: enroll } = await supabase.from('mentis_enrollments')
+          .select('id,member_id,mentis_members(id,name,special_needs_flag,mentis_customers(name,phone))')
           .eq('session_id', id).in('status', ['active', 'invited']).eq('expected', true);
         const list: Row[] = (enroll ?? []).map((e: any) => ({
           key: e.id, memberId: e.member_id, name: e.members?.name ?? '—',
           customer: e.members?.customers?.name, phone: e.members?.customers?.phone,
           alert: !!e.members?.special_needs_flag,
         }));
-        const { data: tasters } = await supabase.from('prospects').select('id,name').eq('status', 'approved');
+        const { data: tasters } = await supabase.from('mentis_prospects').select('id,name').eq('status', 'approved');
         for (const t of tasters ?? []) list.push({ key: `t-${t.id}`, memberId: '', name: t.name, alert: false, taster: true });
         setRows(list);
         await cacheRegister(id, list);
@@ -69,9 +69,9 @@ export default function Register() {
   const openAlert = async (memberId: string) => {
     setAlertFor(alertFor === memberId ? null : memberId);
     if (!notes[memberId]) {
-      const { data } = await supabase.from('member_medical').select('notes').eq('member_id', memberId).single();
+      const { data } = await supabase.from('mentis_member_medical').select('notes').eq('member_id', memberId).single();
       if (data) setNotes((n) => ({ ...n, [memberId]: data.notes }));
-      await supabase.from('audit_log').insert({
+      await supabase.from('mentis_audit_log').insert({
         organization_id: staff?.organization_id, actor_id: userId,
         action: 'medical.read', entity: 'member_medical', entity_id: memberId,
       });

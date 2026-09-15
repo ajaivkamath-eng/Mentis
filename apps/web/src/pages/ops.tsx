@@ -11,12 +11,12 @@ export function Sessions() {
   const [form, setForm] = useState({ name: '', venue_id: '', start_at: '', end_at: '' });
   const [venues, setVenues] = useState<any[]>([]);
   const load = () => {
-    supabase.from('sessions').select('id,name,start_at,end_at,status,venues(name)').order('start_at', { ascending: false }).limit(50).then(({ data }) => setRows(data ?? []));
-    supabase.from('venues').select('id,name').then(({ data }) => setVenues(data ?? []));
+    supabase.from('mentis_sessions').select('id,name,start_at,end_at,status,mentis_venues(name)').order('start_at', { ascending: false }).limit(50).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const notify = async (s: any, subject: string, body: string) => {
-    const { data: enroll } = await supabase.from('enrollments').select('member_id,members(customers(email))').eq('session_id', s.id);
+    const { data: enroll } = await supabase.from('mentis_enrollments').select('member_id,mentis_members(mentis_customers(email))').eq('session_id', s.id);
     for (const e of enroll ?? []) {
       const email = (e as any).members?.customers?.email;
       if (email) await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -26,11 +26,11 @@ export function Sessions() {
   const cancel = async (s: any) => {
     const reason = prompt('Cancellation reason (required):');
     if (!reason?.trim()) return;
-    await supabase.from('sessions').update({ status: 'cancelled', cancel_reason: reason }).eq('id', s.id);
+    await supabase.from('mentis_sessions').update({ status: 'cancelled', cancel_reason: reason }).eq('id', s.id);
     await notify(s, `Session cancelled: ${s.name}`, `${s.name} is cancelled (${reason}).`);
-    const { data: staffing } = await supabase.from('session_staffing').select('staff_id,planned_start,planned_end,rate_card_id,rate_cards(rate_cents)').eq('session_id', s.id);
+    const { data: staffing } = await supabase.from('mentis_session_staffing').select('staff_id,planned_start,planned_end,rate_card_id,mentis_rate_cards(rate_cents)').eq('session_id', s.id);
     for (const st of staffing ?? []) {
-      await supabase.from('staff_time_entries').insert({
+      await supabase.from('mentis_staff_time_entries').insert({
         organization_id: staff?.organization_id, staff_id: st.staff_id, session_id: s.id, kind: 'standby',
         starts_at: st.planned_start, ends_at: st.planned_end, rate_cents: (st as any).rate_cards?.rate_cents ?? 0,
       });
@@ -43,15 +43,15 @@ export function Sessions() {
     const dur = Date.parse(s.end_at) - Date.parse(s.start_at);
     const start = new Date(v).toISOString();
     const end = new Date(Date.parse(start) + dur).toISOString();
-    const { data: hol } = await supabase.from('holiday_calendar').select('id')
+    const { data: hol } = await supabase.from('mentis_holiday_calendar').select('id')
       .lte('starts_on', end.slice(0, 10)).gte('ends_on', start.slice(0, 10));
     if (hol?.length) { alert('New slot falls on a holiday / no-session day (rule 16).'); return; }
-    const { error } = await supabase.from('sessions').update({ start_at: start, end_at: end, status: 'scheduled' }).eq('id', s.id);
+    const { error } = await supabase.from('mentis_sessions').update({ start_at: start, end_at: end, status: 'scheduled' }).eq('id', s.id);
     if (error) { alert(`Blocked: ${error.message}`); return; } // rules 17–18 enforced at save
     const delta = Date.parse(start) - Date.parse(s.start_at);
-    const { data: st } = await supabase.from('session_staffing').select('id,planned_start,planned_end').eq('session_id', s.id);
+    const { data: st } = await supabase.from('mentis_session_staffing').select('id,planned_start,planned_end').eq('session_id', s.id);
     for (const x of st ?? []) {
-      await supabase.from('session_staffing').update({
+      await supabase.from('mentis_session_staffing').update({
         planned_start: new Date(Date.parse(x.planned_start) + delta).toISOString(),
         planned_end: new Date(Date.parse(x.planned_end) + delta).toISOString(),
       }).eq('id', x.id);
@@ -61,7 +61,7 @@ export function Sessions() {
   };
   const create = async () => {
     if (!form.name.trim() || !form.venue_id || !form.start_at || !form.end_at) { alert('Name, venue, start, end required.'); return; }
-    const { error } = await supabase.from('sessions').insert({
+    const { error } = await supabase.from('mentis_sessions').insert({
       organization_id: staff?.organization_id, venue_id: form.venue_id, name: form.name,
       start_at: new Date(form.start_at).toISOString(), end_at: new Date(form.end_at).toISOString(), status: 'scheduled',
     });
@@ -107,13 +107,13 @@ export function Scheduling() {
   const [venues, setVenues] = useState<any[]>([]);
   const [form, setForm] = useState({ name: '', venue_id: '', day_of_week: 2, valid_from: '', valid_to: '', start_time: '18:00', end_time: '19:00' });
   const load = () => {
-    supabase.from('weekly_schedules').select('*,venues(name)').then(({ data }) => setSchedules(data ?? []));
-    supabase.from('holiday_calendar').select('*').order('starts_on').then(({ data }) => setHolidays(data ?? []));
-    supabase.from('venues').select('id,name').then(({ data }) => setVenues(data ?? []));
+    supabase.from('mentis_weekly_schedules').select('*,mentis_venues(name)').then(({ data }) => setSchedules(data ?? []));
+    supabase.from('mentis_holiday_calendar').select('*').order('starts_on').then(({ data }) => setHolidays(data ?? []));
+    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const create = async () => {
-    const { error } = await supabase.from('weekly_schedules').insert({ organization_id: staff?.organization_id, ...form });
+    const { error } = await supabase.from('mentis_weekly_schedules').insert({ organization_id: staff?.organization_id, ...form });
     if (error) alert(error.message); else { setForm({ ...form, name: '' }); load(); }
   };
   const generate = async (sch: any) => {
@@ -124,7 +124,7 @@ export function Scheduling() {
     while (d.toISOString().slice(0, 10) <= end) {
       const date = d.toISOString().slice(0, 10);
       if (d.getUTCDay() === sch.day_of_week && !skip(date)) {
-        const { error } = await supabase.from('sessions').insert({
+        const { error } = await supabase.from('mentis_sessions').insert({
           organization_id: staff?.organization_id, venue_id: sch.venue_id, name: sch.name, schedule_id: sch.id,
           start_at: `${date}T${sch.start_time}:00Z`, end_at: `${date}T${sch.end_time}:00Z`, status: 'scheduled',
         });
@@ -175,15 +175,15 @@ export function Tasks() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [form, setForm] = useState({ title: '', type: 'other', assignee_id: '', group_id: '', due_at: '', priority: 'normal', recurrence: '', chargeable: false, customer_id: '', amount: '' });
   const load = () => {
-    supabase.from('tasks').select('*,mentis_staff!tasks_assignee_id_fkey(display_name)').order('due_at').limit(100).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_tasks').select('*,mentis_staff!tasks_assignee_id_fkey(display_name)').order('due_at').limit(100).then(({ data }) => setRows(data ?? []));
     supabase.from('mentis_staff').select('id,display_name').then(({ data }) => setStaffList(data ?? []));
-    supabase.from('groups').select('id,name').then(({ data }) => setGroups(data ?? []));
-    supabase.from('customers').select('id,name').then(({ data }) => setCustomers(data ?? []));
+    supabase.from('mentis_groups').select('id,name').then(({ data }) => setGroups(data ?? []));
+    supabase.from('mentis_customers').select('id,name').then(({ data }) => setCustomers(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const create = async () => {
     if (!form.title.trim()) return;
-    await supabase.from('tasks').insert({
+    await supabase.from('mentis_tasks').insert({
       organization_id: staff?.organization_id, title: form.title, task_type: form.type,
       assignee_id: form.assignee_id || staff?.id, group_id: form.group_id || null,
       due_at: form.due_at ? new Date(form.due_at).toISOString() : null, priority: form.priority,
@@ -194,9 +194,9 @@ export function Tasks() {
     setForm({ ...form, title: '', amount: '' }); load();
   };
   const approve = async (t: any) => {
-    await supabase.from('tasks').update({ approved_at: new Date().toISOString(), approved_by: staff?.user_id }).eq('id', t.id);
+    await supabase.from('mentis_tasks').update({ approved_at: new Date().toISOString(), approved_by: staff?.user_id }).eq('id', t.id);
     if (t.chargeable_to_customer && t.customer_id && t.amount_cents) {
-      await supabase.from('customer_charges').insert({
+      await supabase.from('mentis_customer_charges').insert({
         organization_id: staff?.organization_id, task_id: t.id, customer_id: t.customer_id,
         amount_cents: t.amount_cents, status: 'pendingApproval',
       });
@@ -204,14 +204,14 @@ export function Tasks() {
     load();
   };
   const done = async (t: any) => {
-    await supabase.from('tasks').update({ status: 'done' }).eq('id', t.id);
+    await supabase.from('mentis_tasks').update({ status: 'done' }).eq('id', t.id);
     load();
   };
   const logWork = async (t: any) => {
     const hours = prompt('Hours worked:', String(t.work_hours ?? ''));
     if (hours == null) return;
     const notes = prompt('Work notes:', t.work_notes ?? '') ?? '';
-    await supabase.from('tasks').update({ work_hours: Number(hours), work_notes: notes }).eq('id', t.id);
+    await supabase.from('mentis_tasks').update({ work_hours: Number(hours), work_notes: notes }).eq('id', t.id);
     load();
   };
   return (
@@ -263,10 +263,10 @@ export function Tasks() {
 export function Inbox() {
   const [rows, setRows] = useState<any[]>([]);
   const [filter, setFilter] = useState('open');
-  const load = () => supabase.from('pending_actions').select('*,action_types(name)').order('due_at').limit(100).then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_pending_actions').select('*,mentis_action_types(name)').order('due_at').limit(100).then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const close = async (a: any) => {
-    await supabase.from('pending_actions').update({ status: 'closed' }).eq('id', a.id);
+    await supabase.from('mentis_pending_actions').update({ status: 'closed' }).eq('id', a.id);
     load();
   };
   const visible = rows.filter((r: any) => filter === 'all' || r.status === filter);

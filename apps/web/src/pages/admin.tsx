@@ -36,10 +36,10 @@ export function Dashboard() {
   useEffect(() => {
     (async () => {
       const [m, t, b, c] = await Promise.all([
-        supabase.from('members').select('id', { count: 'exact', head: true }),
-        supabase.from('prospects').select('status'),
-        supabase.from('pending_actions').select('id', { count: 'exact', head: true }).eq('status', 'breached'),
-        supabase.from('customer_charges').select('amount_cents').eq('status', 'outstandingDebit'),
+        supabase.from('mentis_members').select('id', { count: 'exact', head: true }),
+        supabase.from('mentis_prospects').select('status'),
+        supabase.from('mentis_pending_actions').select('id', { count: 'exact', head: true }).eq('status', 'breached'),
+        supabase.from('mentis_customer_charges').select('amount_cents').eq('status', 'outstandingDebit'),
       ]);
       setStats({
         members: m.count ?? 0, tasters: (t.data ?? []).filter((x: any) => x.status === 'requested').length,
@@ -72,11 +72,11 @@ export function SearchPage() {
     if (q.length < 2) { setResults([]); return; }
     const t = setTimeout(async () => {
       const [m, c, s, t2, e] = await Promise.all([
-        supabase.from('members').select('id,name').ilike('name', `%${q}%`).limit(5),
-        supabase.from('customers').select('id,name').ilike('name', `%${q}%`).limit(5),
-        supabase.from('sessions').select('id,name').ilike('name', `%${q}%`).limit(5),
-        supabase.from('tasks').select('id,title').ilike('title', `%${q}%`).limit(5),
-        supabase.from('events').select('id,name').ilike('name', `%${q}%`).limit(5),
+        supabase.from('mentis_members').select('id,name').ilike('name', `%${q}%`).limit(5),
+        supabase.from('mentis_customers').select('id,name').ilike('name', `%${q}%`).limit(5),
+        supabase.from('mentis_sessions').select('id,name').ilike('name', `%${q}%`).limit(5),
+        supabase.from('mentis_tasks').select('id,title').ilike('title', `%${q}%`).limit(5),
+        supabase.from('mentis_events').select('id,name').ilike('name', `%${q}%`).limit(5),
       ]);
       const all = [
         ...(m.data ?? []).map((r: any) => ({ kind: 'member', id: r.id, title: r.name })),
@@ -141,17 +141,17 @@ export function Settings() {
   const [groups, setGroups] = useState<any[]>([]);
   const [broadcast, setBroadcast] = useState({ group: '', subject: 'Half-term arrangements', body: '' });
   useEffect(() => {
-    supabase.from('action_types').select('*').then(({ data }) => setTypes(data ?? []));
-    supabase.from('groups').select('id,name').then(({ data }) => setGroups(data ?? []));
+    supabase.from('mentis_action_types').select('*').then(({ data }) => setTypes(data ?? []));
+    supabase.from('mentis_groups').select('id,name').then(({ data }) => setGroups(data ?? []));
   }, []);
   const addType = async () => {
     if (!name.trim()) return;
-    await supabase.from('action_types').insert({ organization_id: staff?.organization_id, name, trigger: 'manual' });
+    await supabase.from('mentis_action_types').insert({ organization_id: staff?.organization_id, name, trigger: 'manual' });
     setName('');
-    supabase.from('action_types').select('*').then(({ data }) => setTypes(data ?? []));
+    supabase.from('mentis_action_types').select('*').then(({ data }) => setTypes(data ?? []));
   };
   const sendBroadcast = async () => {
-    const { data: members } = await supabase.from('group_members').select('member_id,members(customers(email))').eq('group_id', broadcast.group);
+    const { data: members } = await supabase.from('mentis_group_members').select('member_id,mentis_members(mentis_customers(email))').eq('group_id', broadcast.group);
     for (const m of members ?? []) {
       const email = (m as any).members?.customers?.email;
       if (email) await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -187,25 +187,25 @@ export function Reports() {
   const [rows, setRows] = useState<any[]>([]);
   const [memberId, setMemberId] = useState('');
   useEffect(() => {
-    supabase.from('staff_time_entries').select('staff_id,hours,kind,mentis_staff!staff_time_entries_staff_id_fkey(display_name)').then(({ data }) => {
+    supabase.from('mentis_staff_time_entries').select('staff_id,hours,kind,mentis_staff!staff_time_entries_staff_id_fkey(display_name)').then(({ data }) => {
       const list: any[] = (data ?? []) as any[];
       const table = coachHours(list.map((e) => ({ staffId: e.staff_id, hours: Number(e.hours), kind: e.kind })), {});
       setRows(table.map((r) => ({ ...r, name: list.find((d) => d.staff_id === r.staffId)?.mentis_staff?.display_name ?? r.staffId })));
     });
   }, []);
   const gdprExport = async () => {
-    const { data: m } = await supabase.from('members').select('*,customers(*)').eq('id', memberId).single();
+    const { data: m } = await supabase.from('mentis_members').select('*,mentis_customers(*)').eq('id', memberId).single();
     if (!m) { alert('Member not found'); return; }
     const blob = new Blob([exportToCSV('member', [m])], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `gdpr-${memberId}.csv`; a.click();
   };
   const erase = async () => {
     if (!confirm('Anonymise this member (financial records retained)?')) return;
-    const { data: m } = await supabase.from('members').select('*').eq('id', memberId).single();
+    const { data: m } = await supabase.from('mentis_members').select('*').eq('id', memberId).single();
     if (!m) return;
     const anon = anonymiseMember(m);
-    await supabase.from('members').update({ name: anon.name, photo_ref: null, erased_at: new Date().toISOString() }).eq('id', memberId);
-    await supabase.from('member_medical').delete().eq('member_id', memberId);
+    await supabase.from('mentis_members').update({ name: anon.name, photo_ref: null, erased_at: new Date().toISOString() }).eq('id', memberId);
+    await supabase.from('mentis_member_medical').delete().eq('member_id', memberId);
     alert('Member anonymised.');
   };
   return (

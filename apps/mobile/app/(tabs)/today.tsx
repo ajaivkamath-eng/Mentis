@@ -10,7 +10,7 @@ export default function Today() {
   const [sessions, setSessions] = useState<any[]>([]);
   useEffect(() => {
     const day = new Date().toISOString().slice(0, 10);
-    supabase.from('sessions').select('id,name,start_at,venues(name)')
+    supabase.from('mentis_sessions').select('id,name,start_at,mentis_venues(name)')
       .gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at')
       .then(({ data }) => setSessions(data ?? []));
   }, []);

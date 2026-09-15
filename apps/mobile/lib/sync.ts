@@ -38,7 +38,7 @@ export async function flushQueue(userId: string): Promise<{ pushed: number; fail
   let failed = 0;
   for (const op of ops) {
     try {
-      const { data: remote } = await supabase.from('attendance_records').select('*')
+      const { data: remote } = await supabase.from('mentis_attendance_records').select('*')
         .eq('session_id', op.record.sessionInstanceId)
         .eq(op.record.memberId ? 'member_id' : 'taster_name', op.record.memberId ?? '')
         .limit(1).single();
@@ -54,7 +54,7 @@ export async function flushQueue(userId: string): Promise<{ pushed: number; fail
           continue; // remote won — drop local op, already converged
         }
       }
-      const { error } = await supabase.from('attendance_records').insert({
+      const { error } = await supabase.from('mentis_attendance_records').insert({
         session_id: op.record.sessionInstanceId, member_id: op.record.memberId ?? null,
         status: op.record.status, recorded_by: userId, recorded_at: op.record.recordedAt, offline: true,
       });

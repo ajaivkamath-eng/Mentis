@@ -6,10 +6,10 @@ import { useAuth } from '../../lib/auth';
 export default function Inbox() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
-  const load = () => supabase.from('pending_actions').select('*').eq('assignee_id', staff?.id).neq('status', 'closed').order('due_at').then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_pending_actions').select('*').eq('assignee_id', staff?.id).neq('status', 'closed').order('due_at').then(({ data }) => setRows(data ?? []));
   useEffect(() => { if (staff) load(); }, [staff?.id]);
   const close = async (id: string) => {
-    await supabase.from('pending_actions').update({ status: 'closed' }).eq('id', id);
+    await supabase.from('mentis_pending_actions').update({ status: 'closed' }).eq('id', id);
     load();
   };
   return (

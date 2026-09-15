@@ -8,20 +8,20 @@ Deno.serve(async () => {
   const { data: rows } = await supabase.from('session_staffing_status').select('session_id,colour').neq('colour', 'GREEN');
   let created = 0;
   for (const row of rows ?? []) {
-    const { data: session } = await supabase.from('sessions')
+    const { data: session } = await supabase.from('mentis_sessions')
       .select('id,organization_id,name,start_at').eq('id', row.session_id).single();
     if (!session) continue;
-    const { data: types } = await supabase.from('action_types').select('id,due_offset,breach_offset')
+    const { data: types } = await supabase.from('mentis_action_types').select('id,due_offset,breach_offset')
       .eq('organization_id', session.organization_id).eq('name', 'name replacement staff').limit(1);
     const type = types?.[0];
     if (!type) continue;
-    const { data: existing } = await supabase.from('pending_actions').select('id')
+    const { data: existing } = await supabase.from('mentis_pending_actions').select('id')
       .eq('linked_entity_id', session.id).neq('status', 'closed').limit(1);
     if (existing?.length) continue;
     const start = Date.parse(session.start_at);
     const dueMs = 30 * 86_400_000;
     const breachMs = 7 * 86_400_000;
-    const { data: action, error } = await supabase.from('pending_actions').insert({
+    const { data: action, error } = await supabase.from('mentis_pending_actions').insert({
       organization_id: session.organization_id, action_type_id: type.id,
       title: `Name replacement staff — ${session.name} (${row.colour})`,
       linked_entity_type: 'session', linked_entity_id: session.id,
@@ -33,15 +33,15 @@ Deno.serve(async () => {
     void sendMail;
   }
   // Breach alerts: open actions past breach_at → email manager + lead coach.
-  const { data: breached } = await supabase.from('pending_actions').select('id,title,organization_id,linked_entity_id')
+  const { data: breached } = await supabase.from('mentis_pending_actions').select('id,title,organization_id,linked_entity_id')
     .eq('status', 'open').lt('breach_at', new Date().toISOString());
   let alerted = 0;
   for (const a of breached ?? []) {
-    await supabase.from('pending_actions').update({ status: 'breached' }).eq('id', a.id);
+    await supabase.from('mentis_pending_actions').update({ status: 'breached' }).eq('id', a.id);
     const adminEmail = Deno.env.get('ADMIN_NOTIFY_EMAIL');
     if (adminEmail) {
       await sendMail(adminEmail, `Action breached: ${a.title}`, `"${a.title}" breached its timeline.`);
-      await supabase.from('communication_log').insert({
+      await supabase.from('mentis_communication_log').insert({
         organization_id: a.organization_id, kind: 'alert', template: 'actionAlert', recipient: adminEmail,
       });
     }

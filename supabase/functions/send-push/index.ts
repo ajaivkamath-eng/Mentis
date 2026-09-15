@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
     }),
   });
   if (organizationId) {
-    await supabase.from('communication_log').insert({
+    await supabase.from('mentis_communication_log').insert({
       organization_id: organizationId, kind: 'alert', template: 'push', recipient: userId,
     });
   }

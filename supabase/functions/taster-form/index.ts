@@ -13,7 +13,7 @@ Deno.serve(async (req) => {
   if (!organizationId || !name?.trim()) {
     return Response.json({ error: 'organizationId and name are required' }, { status: 400, headers: cors });
   }
-  const { data, error } = await supabase.from('prospects').insert({
+  const { data, error } = await supabase.from('mentis_prospects').insert({
     organization_id: organizationId, name: name.trim(), age: age ?? null,
     contact: contact ?? null, preferred_session_id: preferredSessionId ?? null, status: 'requested',
   }).select('id').single();

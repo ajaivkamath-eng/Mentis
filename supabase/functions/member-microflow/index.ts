@@ -14,14 +14,14 @@ Deno.serve(async (req) => {
     if (!memberId || code !== memberId.slice(0, 8)) {
       return Response.json({ error: 'invalid member code' }, { status: 401, headers: cors });
     }
-    const { data: member } = await supabase.from('members').select('id,name,organization_id').eq('id', memberId).single();
+    const { data: member } = await supabase.from('mentis_members').select('id,name,organization_id').eq('id', memberId).single();
     if (!member) return Response.json({ error: 'unknown member' }, { status: 404, headers: cors });
-    const { data: events } = await supabase.from('events').select('id,name,starts_on,ends_on,location,entry_deadline')
+    const { data: events } = await supabase.from('mentis_events').select('id,name,starts_on,ends_on,location,entry_deadline')
       .eq('organization_id', member.organization_id).eq('status', 'published')
       .gte('ends_on', new Date().toISOString().slice(0, 10)).order('starts_on');
-    const { data: entries } = await supabase.from('event_entries').select('event_id,status').eq('member_id', memberId);
-    const { data: bookings } = await supabase.from('bookings').select('id,starts_at,status,slot_id').eq('member_id', memberId).neq('status', 'cancelled').order('starts_at');
-    const { data: reports } = await supabase.from('progress_reports').select('id,period,status,sent_at').eq('member_id', memberId).eq('status', 'sent').order('period', { ascending: false });
+    const { data: entries } = await supabase.from('mentis_event_entries').select('event_id,status').eq('member_id', memberId);
+    const { data: bookings } = await supabase.from('mentis_bookings').select('id,starts_at,status,slot_id').eq('member_id', memberId).neq('status', 'cancelled').order('starts_at');
+    const { data: reports } = await supabase.from('mentis_progress_reports').select('id,period,status,sent_at').eq('member_id', memberId).eq('status', 'sent').order('period', { ascending: false });
     return Response.json({ member, events: events ?? [], entries: entries ?? [], bookings: bookings ?? [], reports: reports ?? [] }, { headers: cors });
   }
   if (req.method === 'POST') {
@@ -32,7 +32,7 @@ Deno.serve(async (req) => {
     if (!['available', 'notAvailable', 'interested'].includes(status)) {
       return Response.json({ error: 'invalid status' }, { status: 400, headers: cors });
     }
-    const { error } = await supabase.from('event_entries')
+    const { error } = await supabase.from('mentis_event_entries')
       .upsert({ event_id: eventId, member_id: memberId, status }, { onConflict: 'event_id,member_id,sub_event_id' });
     if (error) return Response.json({ error: error.message }, { status: 500, headers: cors });
     return Response.json({ ok: true }, { headers: cors });

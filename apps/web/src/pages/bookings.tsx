@@ -11,18 +11,18 @@ export function BookingSlots() {
   const [venues, setVenues] = useState<any[]>([]);
   const [form, setForm] = useState({ coach_id: '', venue_id: '', weekday: 2, start_time: '18:00', duration_minutes: 60, fixed_price_cents: 3000 });
   const load = () => {
-    supabase.from('booking_slots').select('*,mentis_staff!booking_slots_coach_id_fkey(display_name),venues(name)').then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_booking_slots').select('*,mentis_staff!booking_slots_coach_id_fkey(display_name),mentis_venues(name)').then(({ data }) => setRows(data ?? []));
     supabase.from('mentis_staff').select('id,display_name').then(({ data }) => setCoaches(data ?? []));
-    supabase.from('venues').select('id,name').then(({ data }) => setVenues(data ?? []));
+    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const save = async () => {
     if (!form.coach_id || !form.venue_id) return;
-    await supabase.from('booking_slots').insert({ organization_id: staff?.organization_id, ...form });
+    await supabase.from('mentis_booking_slots').insert({ organization_id: staff?.organization_id, ...form });
     load();
   };
   const toggle = async (r: any) => {
-    await supabase.from('booking_slots').update({ status: r.status === 'open' ? 'closed' : 'open' }).eq('id', r.id);
+    await supabase.from('mentis_booking_slots').update({ status: r.status === 'open' ? 'closed' : 'open' }).eq('id', r.id);
     load();
   };
   return (
@@ -59,20 +59,20 @@ export function Bookings() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const load = () => {
-    supabase.from('bookings').select('*,members(name),booking_slots!inner(weekday,start_time,mentis_staff!booking_slots_coach_id_fkey(display_name),fixed_price_cents)').order('starts_at', { ascending: false }).limit(100).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_bookings').select('*,mentis_members(name),mentis_booking_slots!inner(weekday,start_time,mentis_staff!booking_slots_coach_id_fkey(display_name),fixed_price_cents)').order('starts_at', { ascending: false }).limit(100).then(({ data }) => setRows(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const approve = async (b: any) => {
     const coach = b.booking_slots?.mentis_staff?.display_name ?? 'coach';
-    const { data: t } = await supabase.from('tasks').insert({
+    const { data: t } = await supabase.from('mentis_tasks').insert({
       organization_id: staff?.organization_id, title: `1-2-1 ${b.members?.name} (${coach})`,
       task_type: 'oneOnOne', amount_cents: b.booking_slots?.fixed_price_cents ?? 0, due_at: b.starts_at,
     }).select('id').single();
-    await supabase.from('bookings').update({ status: 'approved', task_id: t?.id ?? null }).eq('id', b.id);
+    await supabase.from('mentis_bookings').update({ status: 'approved', task_id: t?.id ?? null }).eq('id', b.id);
     load();
   };
   const setStatus = async (b: any, status: string) => {
-    await supabase.from('bookings').update({ status }).eq('id', b.id);
+    await supabase.from('mentis_bookings').update({ status }).eq('id', b.id);
     load();
   };
   return (

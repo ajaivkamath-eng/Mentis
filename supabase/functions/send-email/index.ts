@@ -8,7 +8,7 @@ Deno.serve(async (req) => {
   const { organizationId, to, subject, body, template, kind, groupId, scheduledFor } = await req.json();
   if (!to || !subject || !body) return new Response('to/subject/body required', { status: 400 });
   if (!scheduledFor) await sendMail(to, subject, body);
-  await supabase.from('communication_log').insert({
+  await supabase.from('mentis_communication_log').insert({
     organization_id: organizationId, kind: kind ?? 'alert', template: template ?? 'custom',
     recipient: to, group_id: groupId ?? null, scheduled_for: scheduledFor ?? null,
   });

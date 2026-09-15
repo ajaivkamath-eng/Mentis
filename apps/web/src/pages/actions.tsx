@@ -6,12 +6,12 @@ import { createManualAction } from '@mentis/core';
 
 /* ---------- Manual actions on others, linked to ANY entity ---------- */
 const LINK_TABLES: Record<string, { table: string; label: string }> = {
-  session: { table: 'sessions', label: 'name' },
-  task: { table: 'tasks', label: 'title' },
-  venue: { table: 'venues', label: 'name' },
-  member: { table: 'members', label: 'name' },
-  event: { table: 'events', label: 'name' },
-  invoice: { table: 'invoices', label: 'period_start' },
+  session: { table: 'mentis_sessions', label: 'name' },
+  task: { table: 'mentis_tasks', label: 'title' },
+  venue: { table: 'mentis_venues', label: 'name' },
+  member: { table: 'mentis_members', label: 'name' },
+  event: { table: 'mentis_events', label: 'name' },
+  invoice: { table: 'mentis_invoices', label: 'period_start' },
 };
 
 export function ActionCreate() {
@@ -23,7 +23,7 @@ export function ActionCreate() {
   const [form, setForm] = useState({ type_id: '', title: '', assignee_id: '', linked_id: '', due_at: '', breach_at: '' });
   const [msg, setMsg] = useState('');
   useEffect(() => {
-    supabase.from('action_types').select('*').then(({ data }) => { setTypes(data ?? []); setForm((f) => ({ ...f, type_id: f.type_id || data?.[0]?.id || '' })); });
+    supabase.from('mentis_action_types').select('*').then(({ data }) => { setTypes(data ?? []); setForm((f) => ({ ...f, type_id: f.type_id || data?.[0]?.id || '' })); });
     supabase.from('mentis_staff').select('id,display_name').then(({ data }) => setStaffList(data ?? []));
   }, []);
   useEffect(() => {
@@ -37,7 +37,7 @@ export function ActionCreate() {
         linkedEntityId: form.linked_id, dueAt: new Date(form.due_at).toISOString(),
         breachAt: form.breach_at ? new Date(form.breach_at).toISOString() : undefined,
       }, form.type_id);
-      await supabase.from('pending_actions').insert({
+      await supabase.from('mentis_pending_actions').insert({
         organization_id: staff?.organization_id, action_type_id: draft.actionTypeId, title: draft.title,
         assignee_id: draft.assigneeId, linked_entity_type: draft.linkedEntityType,
         linked_entity_id: draft.linkedEntityId, due_at: draft.dueAt, breach_at: draft.breachAt ?? null, status: 'open',

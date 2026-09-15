@@ -8,7 +8,7 @@ Deno.serve(async () => {
   const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(url, key);
   const horizon = new Date(Date.now() + 26 * 3_600_000).toISOString();
-  const { data: tasks } = await supabase.from('tasks').select('id,title,due_at,organization_id,assignee_id')
+  const { data: tasks } = await supabase.from('mentis_tasks').select('id,title,due_at,organization_id,assignee_id')
     .neq('status', 'done').not('due_at', 'is', null).lte('due_at', horizon).limit(200);
   let nudged = 0;
   for (const t of tasks ?? []) {
@@ -20,7 +20,7 @@ Deno.serve(async () => {
     if (email) {
       await sendMail(email, `Reminder: ${t.title}`,
         `Hi ${staff.display_name}, a reminder that "${t.title}" is due ${t.due_at}.`);
-      await supabase.from('communication_log').insert({
+      await supabase.from('mentis_communication_log').insert({
         organization_id: t.organization_id, kind: 'reminder', template: 'taskReminder', recipient: email,
       });
     }

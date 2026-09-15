@@ -7,15 +7,15 @@ export default function Tasks() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [title, setTitle] = useState('');
-  const load = () => supabase.from('tasks').select('*').eq('assignee_id', staff?.id).neq('status', 'done').then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_tasks').select('*').eq('assignee_id', staff?.id).neq('status', 'done').then(({ data }) => setRows(data ?? []));
   useEffect(() => { if (staff) load(); }, [staff?.id]);
   const create = async () => {
     if (!title.trim()) return;
-    await supabase.from('tasks').insert({ organization_id: staff?.organization_id, title, task_type: 'other', assignee_id: staff?.id, created_by: staff?.user_id });
+    await supabase.from('mentis_tasks').insert({ organization_id: staff?.organization_id, title, task_type: 'other', assignee_id: staff?.id, created_by: staff?.user_id });
     setTitle(''); load();
   };
   const done = async (id: string) => {
-    await supabase.from('tasks').update({ status: 'done' }).eq('id', id);
+    await supabase.from('mentis_tasks').update({ status: 'done' }).eq('id', id);
     load();
   };
   return (
