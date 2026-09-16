@@ -11,7 +11,7 @@ export function MemberForm() {
   const [form, setForm] = useState({ name: '', dateOfBirth: '', customer_id: '', nokName: '', nokPhone: '', tteNumber: '', handedness: '', playingStyle: '', equipmentNotes: '' });
   const [msg, setMsg] = useState('');
   useEffect(() => {
-    supabase.from('customers').select('id,name').order('name').then(({ data }) => setCustomers(data ?? []));
+    supabase.from('mentis_customers').select('id,name').order('name').then(({ data }) => setCustomers(data ?? []));
   }, []);
   const save = async () => {
     const errs = validateMember({
@@ -21,7 +21,7 @@ export function MemberForm() {
     });
     if (!form.name.trim()) errs.push('name is required');
     if (errs.length) { setMsg(errs.join(' · ')); return; }
-    const { error } = await supabase.from('members').insert({
+    const { error } = await supabase.from('mentis_members').insert({
       organization_id: staff?.organization_id, name: form.name, date_of_birth: form.dateOfBirth,
       customer_id: form.customer_id || null, tte_number: form.tteNumber || null,
       handedness: form.handedness || null, playing_style: form.playingStyle || null,
@@ -29,7 +29,7 @@ export function MemberForm() {
     });
     if (error) { setMsg(error.message); return; }
     if (form.customer_id && (form.nokName || form.nokPhone)) {
-      await supabase.from('customers').update({ nok_name: form.nokName || null, nok_phone: form.nokPhone || null }).eq('id', form.customer_id);
+      await supabase.from('mentis_customers').update({ nok_name: form.nokName || null, nok_phone: form.nokPhone || null }).eq('id', form.customer_id);
     }
     setMsg(`Saved (age ${ageAt(form.dateOfBirth)}).`);
     setForm({ ...form, name: '' });
@@ -67,7 +67,7 @@ export function CustomerForm() {
   const [msg, setMsg] = useState('');
   const save = async () => {
     if (!form.name.trim()) { setMsg('Name is required.'); return; }
-    const { error } = await supabase.from('customers').insert({
+    const { error } = await supabase.from('mentis_customers').insert({
       organization_id: staff?.organization_id, name: form.name, phone: form.phone || null,
       email: form.email || null, guardian_a: form.guardianA || null, guardian_b: form.guardianB || null,
       nok_name: form.nokName || null, nok_phone: form.nokPhone || null,
@@ -101,23 +101,23 @@ export function Enrolments() {
   const [sel, setSel] = useState('');
   const [rows, setRows] = useState<any[]>([]);
   const load = () => {
-    supabase.from('sessions').select('id,name,start_at').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
-    if (sel) supabase.from('enrollments').select('*,members(name)').eq('session_id', sel).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_sessions').select('id,name,start_at').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
+    if (sel) supabase.from('mentis_enrollments').select('*,mentis_members(name)').eq('session_id', sel).then(({ data }) => setRows(data ?? []));
   };
   useEffect(() => { load(); }, [sel]);
   const pause = async (e: any) => {
     const reason = prompt('Pause reason (required):');
     if (!reason?.trim()) return;
-    await supabase.from('enrollments').update({ status: 'paused', expected: false, pause_reason: reason }).eq('id', e.id);
+    await supabase.from('mentis_enrollments').update({ status: 'paused', expected: false, pause_reason: reason }).eq('id', e.id);
     load();
   };
   const resume = async (e: any) => {
-    await supabase.from('enrollments').update({ status: 'active', expected: true, pause_reason: null }).eq('id', e.id);
+    await supabase.from('mentis_enrollments').update({ status: 'active', expected: true, pause_reason: null }).eq('id', e.id);
     load();
   };
   const promote = async (e: any) => {
     if (!confirm(`Promote ${e.members?.name} from the waitlist to invited?`)) return;
-    await supabase.from('enrollments').update({ status: 'invited', expected: true }).eq('id', e.id);
+    await supabase.from('mentis_enrollments').update({ status: 'invited', expected: true }).eq('id', e.id);
     load();
   };
   const waitlist = rows.filter((r: any) => r.status === 'waitlisted').sort((a: any, b: any) => (a.position ?? 99) - (b.position ?? 99));

@@ -11,8 +11,8 @@ export function DiaryCalendar() {
   useEffect(() => {
     const from = `${month}-01T00:00:00Z`;
     const to = `${month}-31T23:59:59Z`;
-    supabase.from('sessions').select('id,name,start_at,end_at,status,venues(name)').gte('start_at', from).lte('start_at', to).order('start_at').then(({ data }) => setSessions(data ?? []));
-    supabase.from('events').select('id,name,starts_on,location').gte('starts_on', `${month}-01`).lte('starts_on', `${month}-31`).then(({ data }) => setEvents(data ?? []));
+    supabase.from('mentis_sessions').select('id,name,start_at,end_at,status,mentis_venues(name)').gte('start_at', from).lte('start_at', to).order('start_at').then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_events').select('id,name,starts_on,location').gte('starts_on', `${month}-01`).lte('starts_on', `${month}-31`).then(({ data }) => setEvents(data ?? []));
   }, [month]);
   const days: Record<string, { sessions: any[]; events: any[] }> = {};
   for (const s of sessions) {

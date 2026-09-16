@@ -8,20 +8,20 @@ export function VenueDashboard() {
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => {
     (async () => {
-      const { data: venues } = await supabase.from('venues').select('id,name');
+      const { data: venues } = await supabase.from('mentis_venues').select('id,name');
       const out = [];
       for (const v of venues ?? []) {
         const [{ data: sessions }, { data: staffing }] = await Promise.all([
-          supabase.from('sessions').select('id').eq('venue_id', v.id),
-          supabase.from('session_staffing').select('planned_start,planned_end,rate_cards(rate_cents),session_id,sessions!inner(venue_id)').eq('sessions.venue_id', v.id),
+          supabase.from('mentis_sessions').select('id').eq('venue_id', v.id),
+          supabase.from('mentis_session_staffing').select('planned_start,planned_end,mentis_rate_cards(rate_cents),session_id,mentis_sessions!inner(venue_id)').eq('mentis_sessions.venue_id', v.id),
         ]);
         const ids = new Set((sessions ?? []).map((s: any) => s.id));
         let cost = 0;
         for (const st of staffing ?? []) {
           const h = (Date.parse(st.planned_end) - Date.parse(st.planned_start)) / 3600000;
-          cost += h * ((st as any).rate_cards?.rate_cents ?? 0);
+          cost += h * ((st as any).mentis_rate_cards?.rate_cents ?? 0);
         }
-        const { count: present } = await supabase.from('attendance_records').select('id', { count: 'exact', head: true }).eq('status', 'present');
+        const { count: present } = await supabase.from('mentis_attendance_records').select('id', { count: 'exact', head: true }).eq('status', 'present');
         out.push({ name: v.name, sessions: ids.size, staffingCost: (cost / 100).toFixed(2), present: present ?? 0 });
       }
       setRows(out);
@@ -48,7 +48,7 @@ export function MemberSessions() {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState('');
   useEffect(() => {
-    supabase.from('members').select('id,name,enrollments(status,sessions(name,start_at))').order('name').then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_members').select('id,name,mentis_enrollments(status,mentis_sessions(name,start_at))').order('name').then(({ data }) => setRows(data ?? []));
   }, []);
   const visible = rows.filter((r: any) => r.name.toLowerCase().includes(q.toLowerCase()));
   return (
@@ -73,14 +73,14 @@ export function IcsExport() {
   const download = async () => {
     if (!staff) return;
     const [{ data: staffing }, { data: tasks }] = await Promise.all([
-      supabase.from('session_staffing').select('planned_start,planned_end,sessions(name)').eq('staff_id', staff.id),
-      supabase.from('tasks').select('title,due_at').eq('assignee_id', staff.id).neq('status', 'done'),
+      supabase.from('mentis_session_staffing').select('planned_start,planned_end,mentis_sessions(name)').eq('staff_id', staff.id),
+      supabase.from('mentis_tasks').select('title,due_at').eq('assignee_id', staff.id).neq('status', 'done'),
     ]);
     const esc = (s: string) => s.replace(/[,;\\]/g, (c) => `\\${c}`).replace(/\n/g, '\\n');
     const fmt = (d: string) => new Date(d).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Mentis//Diary//EN\r\n';
     for (const s of staffing ?? []) {
-      ics += `BEGIN:VEVENT\r\nUID:${Math.random().toString(36).slice(2)}@mentis\r\nDTSTART:${fmt(s.planned_start)}\r\nDTEND:${fmt(s.planned_end)}\r\nSUMMARY:${esc((s.sessions as any)?.name ?? 'Session')}\r\nEND:VEVENT\r\n`;
+      ics += `BEGIN:VEVENT\r\nUID:${Math.random().toString(36).slice(2)}@mentis\r\nDTSTART:${fmt(s.planned_start)}\r\nDTEND:${fmt(s.planned_end)}\r\nSUMMARY:${esc((s.mentis_sessions as any)?.[0]?.name ?? 'Session')}\r\nEND:VEVENT\r\n`;
     }
     for (const t of tasks ?? []) {
       if (!t.due_at) continue;

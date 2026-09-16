@@ -16,11 +16,11 @@ export function Billing() {
   const mine = who || staff?.id;
 
   const load = async () => {
-    let q = supabase.from('invoices').select('id,staff_id,period_start,period_end,status,invoice_lines(amount_cents)');
+    let q = supabase.from('mentis_invoices').select('id,staff_id,period_start,period_end,status,mentis_invoice_lines(amount_cents)');
     if (!canDo('billing.viewAll')) q = q.eq('staff_id', staff?.id);
     const { data } = await q;
     setInvoices(data ?? []);
-    let e = supabase.from('staff_time_entries').select('*').gte('starts_at', range.start).lte('starts_at', range.end);
+    let e = supabase.from('mentis_staff_time_entries').select('*').gte('starts_at', range.start).lte('starts_at', range.end);
     if (!canDo('timesheet.viewAll')) e = e.eq('staff_id', staff?.id);
     const { data: ed } = await e;
     setEntries(ed ?? []);
@@ -32,32 +32,32 @@ export function Billing() {
   useEffect(() => { load(); }, [range.start, range.end]);
 
   const preview = async () => {
-    const { data } = await supabase.from('staff_time_entries').select('*')
+    const { data } = await supabase.from('mentis_staff_time_entries').select('*')
       .eq('staff_id', mine).eq('bill_state', 'unbilled').eq('pending_review', false)
       .gte('starts_at', range.start).lte('starts_at', range.end);
     setDraft(data ?? []);
   };
   const createDraft = async () => {
     if (!draft.length) { alert('Nothing billable in this range.'); return; }
-    const { data: inv, error } = await supabase.from('invoices').insert({
+    const { data: inv, error } = await supabase.from('mentis_invoices').insert({
       organization_id: staff?.organization_id, staff_id: mine,
       period_start: range.start, period_end: range.end, status: 'draft', created_by: staff?.user_id,
     }).select('id').single();
     if (error) { alert(error.message); return; }
     for (const e of draft) {
-      await supabase.from('invoice_lines').insert({
+      await supabase.from('mentis_invoice_lines').insert({
         invoice_id: inv.id, time_entry_id: e.id, hours: e.hours, rate_cents: e.rate_cents,
       });
     }
     alert('Draft invoice created.'); setDraft([]); load();
   };
   const approve = async (id: string) => {
-    const { error } = await supabase.from('invoices').update({ status: 'approved', approved_by: staff?.user_id, approved_at: new Date().toISOString() }).eq('id', id);
+    const { error } = await supabase.from('mentis_invoices').update({ status: 'approved', approved_by: staff?.user_id, approved_at: new Date().toISOString() }).eq('id', id);
     if (error) alert(error.message); else load();
   };
   const pay = async (id: string) => {
     const ref = prompt('Payment reference:') ?? '';
-    await supabase.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_reference: ref }).eq('id', id);
+    await supabase.from('mentis_invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_reference: ref }).eq('id', id);
     load();
   };
 
@@ -108,7 +108,7 @@ export function Timesheet() {
   const { staff, canDo } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const load = async () => {
-    let q = supabase.from('staff_time_entries').select('*,mentis_staff!staff_time_entries_staff_id_fkey(display_name)').order('starts_at', { ascending: false }).limit(100);
+    let q = supabase.from('mentis_staff_time_entries').select('*,mentis_staff!staff_time_entries_staff_id_fkey(display_name)').order('starts_at', { ascending: false }).limit(100);
     if (!canDo('timesheet.viewAll')) q = q.eq('staff_id', staff?.id);
     const { data } = await q;
     setRows(data ?? []);
@@ -119,11 +119,11 @@ export function Timesheet() {
     if (v == null) return;
     const hours = Number(v);
     const increased = hours > Number(r.hours);
-    await supabase.from('staff_time_entries').update({ ends_at: new Date(Date.parse(r.starts_at) + hours * 3_600_000).toISOString(), pending_review: increased ? true : r.pending_review }).eq('id', r.id);
+    await supabase.from('mentis_staff_time_entries').update({ ends_at: new Date(Date.parse(r.starts_at) + hours * 3_600_000).toISOString(), pending_review: increased ? true : r.pending_review }).eq('id', r.id);
     load();
   };
   const approveIncrease = async (r: any) => {
-    await supabase.from('staff_time_entries').update({ pending_review: false }).eq('id', r.id);
+    await supabase.from('mentis_staff_time_entries').update({ pending_review: false }).eq('id', r.id);
     load();
   };
   return (
@@ -149,17 +149,17 @@ export function Timesheet() {
 export function Charges() {
   const { staff, canDo } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
-  const load = () => supabase.from('customer_charges').select('*,customers(name),tasks(title)').order('created_at', { ascending: false }).limit(100).then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_customer_charges').select('*,mentis_customers(name),mentis_tasks(title)').order('created_at', { ascending: false }).limit(100).then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const resolve = async (c: any, collected: boolean) => {
     if (collected) {
-      await supabase.from('customer_charges').update({ status: 'recovered', recovered_at: new Date().toISOString() }).eq('id', c.id);
+      await supabase.from('mentis_customer_charges').update({ status: 'recovered', recovered_at: new Date().toISOString() }).eq('id', c.id);
     } else {
       const due = prompt('Due date (YYYY-MM-DD):');
       if (!due) return;
-      await supabase.from('customer_charges').update({ status: 'outstandingDebit', due_date: due }).eq('id', c.id);
-      const { data: types } = await supabase.from('action_types').select('id').eq('organization_id', staff?.organization_id).eq('name', 'clear outstanding debit').limit(1);
-      if (types?.[0]) await supabase.from('pending_actions').insert({
+      await supabase.from('mentis_customer_charges').update({ status: 'outstandingDebit', due_date: due }).eq('id', c.id);
+      const { data: types } = await supabase.from('mentis_action_types').select('id').eq('organization_id', staff?.organization_id).eq('name', 'clear outstanding debit').limit(1);
+      if (types?.[0]) await supabase.from('mentis_pending_actions').insert({
         organization_id: staff?.organization_id, action_type_id: types[0].id,
         title: `Clear outstanding debit — ${c.customers?.name}`, linked_entity_type: 'customer', linked_entity_id: c.customer_id,
         due_at: new Date(due).toISOString(), status: 'open',

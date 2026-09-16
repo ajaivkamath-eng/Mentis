@@ -10,7 +10,7 @@ export function Members() {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState('');
   useEffect(() => {
-    supabase.from('members').select('id,name,date_of_birth,special_needs_flag,tte_number,customers(name)').order('name').then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_members').select('id,name,date_of_birth,special_needs_flag,tte_number,mentis_customers(name)').order('name').then(({ data }) => setRows(data ?? []));
   }, []);
   const filtered = rows.filter((r) => r.name.toLowerCase().includes(q.toLowerCase()));
   return (
@@ -45,12 +45,12 @@ export function Member360() {
   const [feedback, setFeedback] = useState<any[]>([]);
   const [goals, setGoals] = useState<any[]>([]);
   useEffect(() => {
-    supabase.from('members').select('*,customers(*)').eq('id', id).single().then(({ data }) => setM(data));
-    supabase.from('attendance_records').select('status').eq('member_id', id).then(({ data }) => setAtt(data ?? []));
-    supabase.from('rankings').select('*').eq('member_id', id).order('as_of').then(({ data }) => setRankings(data ?? []));
-    supabase.from('matches').select('*').eq('member_id', id).order('played_on', { ascending: false }).limit(10).then(({ data }) => setMatches(data ?? []));
-    supabase.from('player_feedback').select('body,ratings,created_at').eq('member_id', id).order('created_at', { ascending: false }).limit(10).then(({ data }) => setFeedback(data ?? []));
-    supabase.from('member_goals').select('*').eq('member_id', id).then(({ data }) => setGoals(data ?? []));
+    supabase.from('mentis_members').select('*,mentis_customers(*)').eq('id', id).single().then(({ data }) => setM(data));
+    supabase.from('mentis_attendance_records').select('status').eq('member_id', id).then(({ data }) => setAtt(data ?? []));
+    supabase.from('mentis_rankings').select('*').eq('member_id', id).order('as_of').then(({ data }) => setRankings(data ?? []));
+    supabase.from('mentis_matches').select('*').eq('member_id', id).order('played_on', { ascending: false }).limit(10).then(({ data }) => setMatches(data ?? []));
+    supabase.from('mentis_player_feedback').select('body,ratings,created_at').eq('member_id', id).order('created_at', { ascending: false }).limit(10).then(({ data }) => setFeedback(data ?? []));
+    supabase.from('mentis_member_goals').select('*').eq('member_id', id).then(({ data }) => setGoals(data ?? []));
   }, [id]);
   if (!m) return <div className="p-8">Loading…</div>;
   const plats = [...new Set(rankings.map((r) => r.platform))];
@@ -93,7 +93,7 @@ export function Member360() {
 export function Customers() {
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => {
-    supabase.from('customers').select('id,name,phone,email,members(id,name)').order('name').then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_customers').select('id,name,phone,email,mentis_members(id,name)').order('name').then(({ data }) => setRows(data ?? []));
   }, []);
   return (
     <div>
@@ -114,24 +114,24 @@ export function Tasters() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
-  const load = () => supabase.from('prospects').select('*').order('created_at', { ascending: false }).then(({ data }) => setRows(data ?? []));
+  const load = () => supabase.from('mentis_prospects').select('*').order('created_at', { ascending: false }).then(({ data }) => setRows(data ?? []));
   useEffect(() => {
     load();
-    supabase.from('sessions').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(20).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_sessions').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(20).then(({ data }) => setSessions(data ?? []));
   }, []);
   const approve = async (t: any, sessionId: string) => {
     if (!sessionId) return;
-    await supabase.from('prospects').update({ status: 'approved', approved_session_ids: [sessionId] }).eq('id', t.id);
+    await supabase.from('mentis_prospects').update({ status: 'approved', approved_session_ids: [sessionId] }).eq('id', t.id);
     await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ organizationId: staff?.organization_id, to: t.contact, subject: 'Taster approved', body: `Hi ${t.name}, your taster is approved.`, template: 'tasterApproval', kind: 'invitation' }) });
     load();
   };
   const convert = async (t: any) => {
-    const { data: c } = await supabase.from('customers').insert({ organization_id: staff?.organization_id, name: `${t.name} (guardian)`, phone: t.contact }).select('id').single();
-    if (c) await supabase.from('members').insert({ organization_id: staff?.organization_id, customer_id: c.id, name: t.name, date_of_birth: '2015-01-01' });
-    await supabase.from('prospects').update({ status: 'converted' }).eq('id', t.id);
+    const { data: c } = await supabase.from('mentis_customers').insert({ organization_id: staff?.organization_id, name: `${t.name} (guardian)`, phone: t.contact }).select('id').single();
+    if (c) await supabase.from('mentis_members').insert({ organization_id: staff?.organization_id, customer_id: c.id, name: t.name, date_of_birth: '2015-01-01' });
+    await supabase.from('mentis_prospects').update({ status: 'converted' }).eq('id', t.id);
     // Conversion pack: welcome email + equipment guide (SportProfile content).
-    const { data: sport } = await supabase.from('sport_profiles').select('equipment_guide').limit(1).single();
+    const { data: sport } = await supabase.from('mentis_sport_profiles').select('equipment_guide').limit(1).single();
     if (t.contact && t.contact.includes('@')) {
       await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -13,18 +13,18 @@ export function ProgressReports() {
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [preview, setPreview] = useState('');
   const load = () => {
-    supabase.from('members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
-    supabase.from('progress_reports').select('*,members(name)').order('period', { ascending: false }).limit(50).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
+    supabase.from('mentis_progress_reports').select('*,mentis_members(name)').order('period', { ascending: false }).limit(50).then(({ data }) => setRows(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const compose = async () => {
     if (!memberId) return;
     const [{ data: att }, { data: matches }, { data: fb }, { data: goals }, { data: ranks }] = await Promise.all([
-      supabase.from('attendance_records').select('status').eq('member_id', memberId),
-      supabase.from('matches').select('result,played_on').eq('member_id', memberId).order('played_on'),
-      supabase.from('player_feedback').select('ratings,created_at').eq('member_id', memberId).order('created_at'),
-      supabase.from('member_goals').select('status').eq('member_id', memberId),
-      supabase.from('rankings').select('platform,rank_value,as_of').eq('member_id', memberId).order('as_of'),
+      supabase.from('mentis_attendance_records').select('status').eq('member_id', memberId),
+      supabase.from('mentis_matches').select('result,played_on').eq('member_id', memberId).order('played_on'),
+      supabase.from('mentis_player_feedback').select('ratings,created_at').eq('member_id', memberId).order('created_at'),
+      supabase.from('mentis_member_goals').select('status').eq('member_id', memberId),
+      supabase.from('mentis_rankings').select('platform,rank_value,as_of').eq('member_id', memberId).order('as_of'),
     ]);
     const ratingSeries: Record<string, { at: string; score: number }[]> = {};
     for (const f of fb ?? []) {
@@ -56,22 +56,22 @@ export function ProgressReports() {
     setPreview(lines.join('\n'));
   };
   const save = async (status: string) => {
-    const { data } = await supabase.from('progress_reports').upsert(
+    const { data } = await supabase.from('mentis_progress_reports').upsert(
       { organization_id: staff?.organization_id, member_id: memberId, period, status },
       { onConflict: 'member_id,period' }).select('id').single();
     if (status === 'sent' && data) {
-      const { data: m } = await supabase.from('members').select('customers(email)').eq('id', memberId).single();
+      const { data: m } = await supabase.from('mentis_members').select('mentis_customers(email)').eq('id', memberId).single();
       const email = (m as any)?.customers?.email;
       if (email) {
         await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ organizationId: staff?.organization_id, to: email, subject: `Progress report ${period}`, body: preview, template: 'progressReport', kind: 'report' }) });
-        await supabase.from('progress_reports').update({ sent_at: new Date().toISOString() }).eq('id', data.id);
+        await supabase.from('mentis_progress_reports').update({ sent_at: new Date().toISOString() }).eq('id', data.id);
       }
     }
     load();
   };
   const approve = async (r: any) => {
-    await supabase.from('progress_reports').update({ status: 'approved', approved_by: staff?.user_id }).eq('id', r.id);
+    await supabase.from('mentis_progress_reports').update({ status: 'approved', approved_by: staff?.user_id }).eq('id', r.id);
     load();
   };
   return (
@@ -107,8 +107,8 @@ export function CoachPerformance() {
       const out = [];
       for (const c of coaches ?? []) {
         const [{ count: sessions }, { data: fb }] = await Promise.all([
-          supabase.from('session_staffing').select('id', { count: 'exact', head: true }).eq('staff_id', c.id),
-          supabase.from('player_feedback').select('ratings').eq('coach_id', c.id).limit(50),
+          supabase.from('mentis_session_staffing').select('id', { count: 'exact', head: true }).eq('staff_id', c.id),
+          supabase.from('mentis_player_feedback').select('ratings').eq('coach_id', c.id).limit(50),
         ]);
         const vals = (fb ?? []).flatMap((f: any) => Object.values(f.ratings ?? {})) as number[];
         out.push({ name: c.display_name, sessions: sessions ?? 0, feedback: (fb ?? []).length,
@@ -135,8 +135,8 @@ export function SparringMatcher() {
   const [pairs, setPairs] = useState<any[]>([]);
   useEffect(() => {
     (async () => {
-      const { data: members } = await supabase.from('members').select('id,name,playing_style');
-      const { data: enroll } = await supabase.from('enrollments').select('session_id,member_id');
+      const { data: members } = await supabase.from('mentis_members').select('id,name,playing_style');
+      const { data: enroll } = await supabase.from('mentis_enrollments').select('session_id,member_id');
       const byMember: Record<string, Set<string>> = {};
       for (const e of enroll ?? []) {
         byMember[e.member_id] = byMember[e.member_id] ?? new Set();
@@ -174,9 +174,9 @@ export function AutoSuggest() {
   const [msg, setMsg] = useState('');
   const load = async () => {
     const [{ data: e }, { data: m }, { data: en }] = await Promise.all([
-      supabase.from('events').select('id,name,starts_on,entry_deadline').eq('status', 'published').order('starts_on'),
-      supabase.from('members').select('id,name'),
-      supabase.from('event_entries').select('event_id,member_id'),
+      supabase.from('mentis_events').select('id,name,starts_on,entry_deadline').eq('status', 'published').order('starts_on'),
+      supabase.from('mentis_members').select('id,name'),
+      supabase.from('mentis_event_entries').select('event_id,member_id'),
     ]);
     setEvents(e ?? []); setMembers(m ?? []); setEntries(en ?? []);
   };
@@ -185,7 +185,7 @@ export function AutoSuggest() {
     const have = new Set(entries.filter((e: any) => e.event_id === eventId).map((e: any) => e.member_id));
     const missing = members.filter((m: any) => !have.has(m.id));
     for (const m of missing) {
-      await supabase.from('event_entries').insert({ event_id: eventId, member_id: m.id, status: 'suggested', suggested_by: staff?.user_id });
+      await supabase.from('mentis_event_entries').insert({ event_id: eventId, member_id: m.id, status: 'suggested', suggested_by: staff?.user_id });
     }
     setMsg(`Suggested ${missing.length} members.`);
     load();

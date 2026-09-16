@@ -14,21 +14,21 @@ export function Events() {
   const [sel, setSel] = useState('');
   const [form, setForm] = useState({ name: '', starts_on: '', ends_on: '', location: '', entry_deadline: '', source: 'manual' });
   const load = () => {
-    supabase.from('events').select('*').order('starts_on').then(({ data }) => setEvents(data ?? []));
-    supabase.from('members').select('id,name,date_of_birth').then(({ data }) => setMembers(data ?? []));
-    supabase.from('event_entries').select('*,members(name)').then(({ data }) => setEntries(data ?? []));
+    supabase.from('mentis_events').select('*').order('starts_on').then(({ data }) => setEvents(data ?? []));
+    supabase.from('mentis_members').select('id,name,date_of_birth').then(({ data }) => setMembers(data ?? []));
+    supabase.from('mentis_event_entries').select('*,mentis_members(name)').then(({ data }) => setEntries(data ?? []));
   };
   useEffect(() => { load(); }, []);
   const create = async () => {
-    const { error } = await supabase.from('events').insert({ organization_id: staff?.organization_id, ...form, status: 'published' });
+    const { error } = await supabase.from('mentis_events').insert({ organization_id: staff?.organization_id, ...form, status: 'published' });
     if (error) alert(error.message); else { setForm({ ...form, name: '' }); load(); }
   };
   const suggest = async (memberId: string) => {
-    await supabase.from('event_entries').insert({ event_id: sel, member_id: memberId, status: 'suggested', suggested_by: staff?.user_id });
+    await supabase.from('mentis_event_entries').insert({ event_id: sel, member_id: memberId, status: 'suggested', suggested_by: staff?.user_id });
     load();
   };
   const confirmGuardian = async (entryId: string) => {
-    await supabase.from('event_entries').update({ guardian_confirmed: true }).eq('id', entryId);
+    await supabase.from('mentis_event_entries').update({ guardian_confirmed: true }).eq('id', entryId);
     load();
   };
   const ev = events.find((e) => e.id === sel);
@@ -102,9 +102,9 @@ export function MatchEntry() {
   const [form, setForm] = useState({ member_id: '', date: '', opponent: '', gamesFor: '', gamesAgainst: '', result: 'W', source: 'manual', session_id: '', event_id: '' });
   const [msg, setMsg] = useState('');
   useEffect(() => {
-    supabase.from('members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
-    supabase.from('sessions').select('id,name').order('start_at', { ascending: false }).limit(20).then(({ data }) => setSessions(data ?? []));
-    supabase.from('events').select('id,name').order('starts_on', { ascending: false }).limit(20).then(({ data }) => setEvents(data ?? []));
+    supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
+    supabase.from('mentis_sessions').select('id,name').order('start_at', { ascending: false }).limit(20).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_events').select('id,name').order('starts_on', { ascending: false }).limit(20).then(({ data }) => setEvents(data ?? []));
   }, []);
   const save = async () => {
     const gf = form.gamesFor.split(',').map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x));
@@ -115,7 +115,7 @@ export function MatchEntry() {
       source: form.source as 'manual', sessionId: form.session_id || undefined, eventId: form.event_id || undefined,
     });
     if (errs.length) { setMsg(errs.join(' · ')); return; }
-    const { error } = await supabase.from('matches').insert({
+    const { error } = await supabase.from('mentis_matches').insert({
       member_id: form.member_id, played_on: form.date, opponent: form.opponent,
       games_for: gf, games_against: ga, result: form.result, source: form.source,
       session_id: form.session_id || null, event_id: form.event_id || null,
@@ -160,18 +160,18 @@ export function RankingEntry() {
   const [rows, setRows] = useState<any[]>([]);
   const [form, setForm] = useState({ member_id: '', platform: 'tte', rank: '', as_of: new Date().toISOString().slice(0, 10) });
   useEffect(() => {
-    supabase.from('members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
+    supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
   }, []);
   useEffect(() => {
-    if (form.member_id) supabase.from('rankings').select('*').eq('member_id', form.member_id).order('as_of', { ascending: false }).limit(20).then(({ data }) => setRows(data ?? []));
+    if (form.member_id) supabase.from('mentis_rankings').select('*').eq('member_id', form.member_id).order('as_of', { ascending: false }).limit(20).then(({ data }) => setRows(data ?? []));
   }, [form.member_id]);
   const save = async () => {
     if (!form.member_id || !form.rank) return;
-    await supabase.from('rankings').insert({
+    await supabase.from('mentis_rankings').insert({
       member_id: form.member_id, platform: form.platform, rank_value: Number(form.rank), as_of: form.as_of,
     });
     setForm({ ...form, rank: '' });
-    supabase.from('rankings').select('*').eq('member_id', form.member_id).order('as_of', { ascending: false }).limit(20).then(({ data }) => setRows(data ?? []));
+    supabase.from('mentis_rankings').select('*').eq('member_id', form.member_id).order('as_of', { ascending: false }).limit(20).then(({ data }) => setRows(data ?? []));
   };
   return (
     <div>
@@ -199,15 +199,15 @@ export function Goals() {
   const [rows, setRows] = useState<any[]>([]);
   const [form, setForm] = useState({ description: '', type: 'free', targetDate: '' });
   useEffect(() => {
-    supabase.from('members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
+    supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
   }, []);
   const load = () => {
-    if (memberId) supabase.from('member_goals').select('*').eq('member_id', memberId).then(({ data }) => setRows(data ?? []));
+    if (memberId) supabase.from('mentis_member_goals').select('*').eq('member_id', memberId).then(({ data }) => setRows(data ?? []));
   };
   useEffect(() => { load(); }, [memberId]);
   const save = async () => {
     if (!memberId || !form.description.trim()) return;
-    await supabase.from('member_goals').insert({
+    await supabase.from('mentis_member_goals').insert({
       member_id: memberId, description: form.description, goal_type: form.type,
       target_date: form.targetDate || null, status: 'inProgress',
     });
@@ -215,7 +215,7 @@ export function Goals() {
   };
   const cycle = async (g: any) => {
     const next = g.status === 'inProgress' ? 'achieved' : g.status === 'achieved' ? 'missed' : 'inProgress';
-    await supabase.from('member_goals').update({ status: next }).eq('id', g.id);
+    await supabase.from('mentis_member_goals').update({ status: next }).eq('id', g.id);
     load();
   };
   return (
@@ -246,16 +246,16 @@ export function Analytics() {
   const [memberId, setMemberId] = useState('');
   const [data, setData] = useState<{ matches: any[]; attendance: any[]; rankings: any[]; feedback: any[] }>({ matches: [], attendance: [], rankings: [], feedback: [] });
   useEffect(() => {
-    supabase.from('members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
+    supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
   }, []);
   useEffect(() => {
     if (!memberId) return;
     (async () => {
       const [m, a, r, f] = await Promise.all([
-        supabase.from('matches').select('*').eq('member_id', memberId).order('played_on'),
-        supabase.from('attendance_records').select('status').eq('member_id', memberId),
-        supabase.from('rankings').select('*').eq('member_id', memberId).order('as_of'),
-        supabase.from('player_feedback').select('ratings,created_at').eq('member_id', memberId).order('created_at'),
+        supabase.from('mentis_matches').select('*').eq('member_id', memberId).order('played_on'),
+        supabase.from('mentis_attendance_records').select('status').eq('member_id', memberId),
+        supabase.from('mentis_rankings').select('*').eq('member_id', memberId).order('as_of'),
+        supabase.from('mentis_player_feedback').select('ratings,created_at').eq('member_id', memberId).order('created_at'),
       ]);
       setData({ matches: m.data ?? [], attendance: a.data ?? [], rankings: r.data ?? [], feedback: f.data ?? [] });
     })();

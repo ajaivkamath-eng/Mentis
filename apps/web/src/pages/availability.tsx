@@ -10,7 +10,7 @@ export function Availability() {
   const [staffList, setStaffList] = useState<any[]>([]);
   const [form, setForm] = useState({ staff_id: '', starts_at: '', ends_at: '', available: false, reason: '' });
   const load = async () => {
-    const { data } = await supabase.from('staff_availability')
+    const { data } = await supabase.from('mentis_staff_availability')
       .select('*,mentis_staff!staff_availability_staff_id_fkey(display_name)')
       .order('starts_at', { ascending: false }).limit(60);
     setRows(data ?? []);
@@ -25,7 +25,7 @@ export function Availability() {
       alert('Only coaches/admins can record on behalf of others.');
       return;
     }
-    await supabase.from('staff_availability').insert({
+    await supabase.from('mentis_staff_availability').insert({
       organization_id: staff?.organization_id, staff_id: form.staff_id,
       starts_at: form.starts_at, ends_at: form.ends_at, available: form.available,
       reason: form.reason || null, recorded_by: staff?.user_id,
