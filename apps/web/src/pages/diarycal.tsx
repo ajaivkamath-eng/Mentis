@@ -38,7 +38,7 @@ export function DiaryCalendar() {
         <input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} />
       } />
       <div className="grid grid-cols-7 gap-1">
-        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="text-xs font-bold p-1" style={{ color: 'var(--muted)' }}>{d}</div>)}
+        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="text-xs font-bold p-1" style={{ color: 'var(--ink-muted)' }}>{d}</div>)}
         {cells.map((d, i) => (
           <div key={i} className="card p-1" style={{ minHeight: 90, opacity: d ? 1 : 0.25 }}>
             {d && <>
@@ -49,7 +49,7 @@ export function DiaryCalendar() {
                 </Link>
               ))}
               {(days[d]?.events ?? []).map((e: any) => (
-                <div key={e.id} className="text-xs truncate" style={{ color: 'var(--mentis-gold)' }}>🏆 {e.name}</div>
+                <div key={e.id} className="text-xs truncate" style={{ color: 'var(--warning)' }}>🏆 {e.name}</div>
               ))}
             </>}
           </div>

@@ -71,9 +71,9 @@ export function Billing() {
     <div>
       <PageTitle title="Billing" sub="Planned vs actual hours → locked hourly-rate invoices" />
       <div className="grid md:grid-cols-3 gap-4 mb-4">
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Invoiced</div><div className="text-2xl font-black">{gbp(invoiced)}</div></div>
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Outstanding (unpaid + unbilled)</div><div className="text-2xl font-black">{gbp(unpaid + unbilledCents)}</div></div>
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Range billed / unbilled items</div><div className="text-2xl font-black">{bb.billed.length} / {bb.unbilled.length}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Invoiced</div><div className="text-2xl font-black">{gbp(invoiced)}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Outstanding (unpaid + unbilled)</div><div className="text-2xl font-black">{gbp(unpaid + unbilledCents)}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Range billed / unbilled items</div><div className="text-2xl font-black">{bb.billed.length} / {bb.unbilled.length}</div></div>
       </div>
       <div className="card p-4 mb-4 flex flex-wrap gap-2 items-end">
         <label className="text-sm">From <input type="date" className="input" value={range.start} onChange={(e) => setRange({ ...range, start: e.target.value })} /></label>
@@ -91,7 +91,7 @@ export function Billing() {
         <thead><tr><th>Period</th><th>Status</th><th>Total</th><th></th></tr></thead>
         <tbody>{invoices.map((i: any) => (
           <tr key={i.id}><td>{i.period_start} → {i.period_end}</td>
-            <td><span className="badge" style={{ background: 'var(--line)' }}>{i.status}</span></td>
+            <td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{i.status}</span></td>
             <td className="font-bold">{gbp(total(i))}</td>
             <td className="flex gap-2">
               {canDo('invoices.approve') && (i.status === 'draft' || i.status === 'pendingApproval') && <button className="btn btn-primary" onClick={() => approve(i.id)}>Approve (lock)</button>}
@@ -175,7 +175,7 @@ export function Charges() {
         <thead><tr><th>Customer</th><th>Task</th><th>Amount</th><th>Status</th><th></th></tr></thead>
         <tbody>{rows.map((c: any) => (
           <tr key={c.id}><td className="font-semibold">{c.customers?.name}</td><td>{c.tasks?.title}</td>
-            <td>{gbp(c.amount_cents)}</td><td><span className="badge" style={{ background: 'var(--line)' }}>{c.status}</span></td>
+            <td>{gbp(c.amount_cents)}</td><td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{c.status}</span></td>
             <td>{canDo('charges.manage') && c.status === 'approved' && (
               <span className="flex gap-2">
                 <button className="btn btn-primary" onClick={() => resolve(c, true)}>Retrieved</button>

@@ -87,7 +87,7 @@ export function Sessions() {
         <tbody>{rows.map((s) => (
           <tr key={s.id}><td><Link to={`/register/${s.id}`} className="font-semibold">{s.name}</Link></td>
             <td>{new Date(s.start_at).toLocaleString()}</td><td>{s.venues?.name}</td>
-            <td><span className="badge" style={{ background: 'var(--line)' }}>{s.status}</span></td>
+            <td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{s.status}</span></td>
             <td className="flex gap-2">{canDo('sessions.manage') && s.status === 'scheduled' && (
               <span className="flex gap-2">
                 <button className="btn btn-ghost" onClick={() => postpone(s)}>Postpone</button>
@@ -285,7 +285,7 @@ export function Inbox() {
         <tbody>{visible.map((a: any) => (
           <tr key={a.id}><td className="font-semibold">{a.title}</td><td>{a.action_types?.name}</td>
             <td>{new Date(a.due_at).toLocaleDateString()}</td>
-            <td><span className="badge" style={{ background: a.status === 'breached' ? 'var(--red)' : 'var(--line)', color: a.status === 'breached' ? '#fff' : undefined }}>{a.status}</span></td>
+            <td><span className="badge" style={{ background: a.status === 'breached' ? 'var(--danger)' : 'var(--border)', color: a.status === 'breached' ? '#fff' : undefined }}>{a.status}</span></td>
             <td>{a.status !== 'closed' && <button className="btn btn-primary" onClick={() => close(a)}>Close</button>}</td></tr>
         ))}</tbody>
       </table></div>

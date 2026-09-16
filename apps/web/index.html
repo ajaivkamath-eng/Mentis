@@ -1,13 +1,81 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0b1f3a" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#060b16" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="Mentis — coaching organisation management for Kingfisher Table Tennis Club: sessions, registers, billing and competition."
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Mentis — Kingfisher TTC</title>
+
+    <!-- Theme is applied before first paint: no flash of the wrong palette. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('mentis.theme') || 'system';
+          var systemLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+          var dark = stored === 'dark' || (stored === 'system' && !systemLight);
+          var root = document.documentElement;
+          root.classList.toggle('dark', dark);
+          root.style.colorScheme = dark ? 'dark' : 'light';
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#060b16' : '#f4f7fc');
+        } catch (e) {}
+      })();
+    </script>
+
+    <style>
+      /* First-paint splash — replaced the moment React mounts. Keeps the very
+         first frame on-brand instead of a white flash on a dark app. */
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: #060b16;
+        color: #eef2f9;
+        font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+      html:not(.dark) #boot { background: #f4f7fc; color: #0b1220; }
+      #boot .mark {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, #14b8a6, #0d9488 55%, #4f46e5);
+        box-shadow: 0 10px 30px -10px rgba(20, 184, 166, 0.55);
+        animation: boot-pulse 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+      #boot .label {
+        margin-top: 14px;
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        opacity: 0.6;
+      }
+      @keyframes boot-pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(0.94); opacity: 0.75; }
+      }
+      @media (prefers-reduced-motion: reduce) { #boot .mark { animation: none; } }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="boot" aria-hidden="true">
+      <div style="text-align: center">
+        <div class="mark"></div>
+        <div class="label">Mentis</div>
+      </div>
+    </div>
+    <noscript>
+      <p style="padding: 24px; font-family: system-ui">
+        Mentis needs JavaScript enabled to run the coaching console.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -131,7 +131,7 @@ export function Enrolments() {
         <thead><tr><th>Member</th><th>Status</th><th>Expected</th><th></th></tr></thead>
         <tbody>{rows.map((r: any) => (
           <tr key={r.id}><td className="font-semibold">{r.members?.name}</td>
-            <td><span className="badge" style={{ background: 'var(--line)' }}>{r.status}</span></td>
+            <td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{r.status}</span></td>
             <td>{r.expected ? 'yes' : 'no'}</td>
             <td className="flex gap-2">
               {(r.status === 'active' || r.status === 'invited') && <button className="btn btn-ghost" onClick={() => pause(r)}>Pause</button>}

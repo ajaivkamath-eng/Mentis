@@ -1,81 +1,80 @@
-import { NavLink, Navigate } from 'react-router-dom';
+/**
+ * Backwards-compatible entry points for the app frame.
+ *
+ * Product code that imported `<Shell>`, `<PageTitle>` or `<Protected>` from here
+ * keeps working — they now delegate to the redesigned DS v2 components, so all
+ * ~30 existing pages inherit the new shell without being touched.
+ *
+ * New code should import from `components/layout` and `components/patterns`.
+ */
+import { Navigate } from 'react-router-dom';
+import { LogOut, ShieldAlert } from 'lucide-react';
 import { useAuth } from './auth';
-import type { Permission, Role } from '@mentis/core';
-import { switchableRoles } from '@mentis/core';
-import { LayoutDashboard, CalendarDays, Users, ClipboardList, Wallet, Trophy, Inbox, Settings, Search, LogOut, Moon, Sun } from 'lucide-react';
-import { useState, type ReactElement } from 'react';
+import type { Permission } from '@mentis/core';
+import { AppShell } from '../components/layout/app-shell';
+import { PageHeader, type PageHeaderProps } from '../components/patterns/page-header';
+import { EmptyState } from '../components/ui/empty-state';
+import { Button } from '../components/ui/button';
+import { SkeletonPage } from '../components/ui/skeleton';
 
-export function Protected({ perm, children }: { perm?: Permission; children: ReactElement }) {
-  const { userId, staff, role, loading, canDo } = useAuth();
-  if (loading) return <div className="p-8">Loading…</div>;
+export { AppShell as Shell } from '../components/layout/app-shell';
+export { PageHeader } from '../components/patterns/page-header';
+export { PageTransition, Reveal } from '../components/patterns/page-transition';
+
+/** Route guard: skeleton while auth resolves, then a helpful state, never a dead end. */
+export function Protected({ perm, children }: { perm?: Permission; children: React.ReactElement }) {
+  const { userId, staff, role, loading, canDo, signOut } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-[var(--content-max)] p-5">
+        <SkeletonPage />
+      </div>
+    );
+  }
   if (!userId) return <Navigate to="/login" replace />;
-  if (!staff) return <div className="p-8">No Mentis staff record — ask a Super Admin to assign your roles.</div>;
-  if (!role) return <div className="p-8">No role assigned.</div>;
-  if (perm && !canDo(perm)) return <div className="p-8">Not permitted for the {role} role.</div>;
+
+  // Outside the shell on purpose: these states should not look like a working app.
+  const blocking = !staff || !role || (perm && !canDo(perm));
+  if (blocking) {
+    return (
+      <div className="grid min-h-dvh place-items-center bg-bg px-4">
+        <div className="card w-full max-w-lg p-2">
+          <EmptyState
+            icon={ShieldAlert}
+            tone={perm && !canDo(perm) ? 'warning' : 'danger'}
+            title={
+              !staff
+                ? 'No Mentis staff record'
+                : !role
+                  ? 'No role assigned'
+                  : perm && !canDo(perm)
+                    ? 'Not permitted'
+                    : 'Access blocked'
+            }
+            description={
+              !staff
+                ? 'Your Rally account is signed in, but it is not linked to a Mentis staff record yet. Ask a Super Admin to assign your roles.'
+                : !role
+                  ? 'This account has no Mentis role. Ask a Super Admin to assign one.'
+                  : `The ${role} role does not include “${perm}”. Switch role from the account menu, or ask a Super Admin to extend your roles.`
+            }
+            action={
+              <Button intent="secondary" size="sm" iconLeft={<LogOut />} onClick={() => void signOut()}>
+                Sign out
+              </Button>
+            }
+          />
+        </div>
+      </div>
+    );
+  }
+
   return children;
 }
 
-export function RoleSwitcher() {
-  const { roles, role, setRole } = useAuth();
-  const options = switchableRoles(roles);
-  if (options.length <= 1) return <span className="badge" style={{ background: 'var(--line)' }}>{role}</span>;
-  return (
-    <select className="input" style={{ width: 'auto' }} value={role ?? ''} onChange={(e) => setRole(e.target.value as Role)} aria-label="Active role">
-      {options.map((r) => <option key={r} value={r}>{r}</option>)}
-    </select>
-  );
-}
-
-const NAV: { to: string; label: string; icon: ReactElement; perm?: Permission }[] = [
-  { to: '/', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
-  { to: '/today', label: 'Today', icon: <CalendarDays size={18} />, perm: 'sessions.assigned' },
-  { to: '/sessions', label: 'Sessions', icon: <CalendarDays size={18} />, perm: 'sessions.manage' },
-  { to: '/members', label: 'Members', icon: <Users size={18} />, perm: 'customers.view' },
-  { to: '/tasks', label: 'Tasks', icon: <ClipboardList size={18} />, perm: 'tasks.viewOwn' },
-  { to: '/billing', label: 'Billing', icon: <Wallet size={18} />, perm: 'billing.viewOwn' },
-  { to: '/events', label: 'Events', icon: <Trophy size={18} />, perm: 'events.viewOwn' },
-  { to: '/inbox', label: 'Inbox', icon: <Inbox size={18} />, perm: 'actions.closeOwn' },
-  { to: '/diary-manage', label: 'Diary', icon: <CalendarDays size={18} />, perm: 'diary.manage' },
-  { to: '/staffing', label: 'Staffing', icon: <Users size={18} />, perm: 'staffing.manage' },
-  { to: '/availability', label: 'Availability', icon: <CalendarDays size={18} />, perm: 'availability.recordSelf' },
-  { to: '/venues', label: 'Venues', icon: <Settings size={18} />, perm: 'venues.manage' },
-  { to: '/import', label: 'Import', icon: <Search size={18} />, perm: 'sessions.manage' },
-  { to: '/reports', label: 'Reports', icon: <Search size={18} />, perm: 'billing.viewAll' },
-  { to: '/bookings', label: 'Bookings', icon: <Trophy size={18} />, perm: 'events.manage' },
-  { to: '/progress', label: 'Progress', icon: <Trophy size={18} />, perm: 'events.manage' },
-  { to: '/search', label: 'Search', icon: <Search size={18} /> },
-  { to: '/settings', label: 'Settings', icon: <Settings size={18} />, perm: 'org.manage' },
-];
-
-export function Shell({ children }: { children: React.ReactNode }) {
-  const { staff, canDo, signOut } = useAuth();
-  const [dark, setDark] = useState(true);
-  return (
-    <div className={dark ? 'dark' : ''} style={{ minHeight: '100vh' }}>
-      <div className="flex" style={{ minHeight: '100vh' }}>
-        <aside className="card hidden md:flex flex-col gap-1 p-3 m-3" style={{ width: 220, borderRadius: '1rem' }}>
-          <div className="px-2 py-3 font-black text-xl">Mentis <span className="text-sm font-semibold" style={{ color: 'var(--muted)' }}>· Kingfisher</span></div>
-          {NAV.filter((n) => !n.perm || canDo(n.perm) || n.to === '/').map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.to === '/'} className="navlink">{n.icon}{n.label}</NavLink>
-          ))}
-          <div className="mt-auto flex flex-col gap-2">
-            <RoleSwitcher />
-            <div className="text-xs px-1" style={{ color: 'var(--muted)' }}>{staff?.display_name}</div>
-            <button className="btn btn-ghost" onClick={() => setDark((d) => !d)}>{dark ? <Sun size={16} /> : <Moon size={16} />} Theme</button>
-            <button className="btn btn-ghost" onClick={signOut}><LogOut size={16} /> Sign out</button>
-          </div>
-        </aside>
-        <main className="flex-1 p-4 md:p-6" style={{ maxWidth: 1200 }}>{children}</main>
-      </div>
-    </div>
-  );
-}
-
-export function PageTitle({ title, sub, right }: { title: string; sub?: string; right?: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between mb-4">
-      <div><h1 className="text-2xl font-black">{title}</h1>{sub && <p className="text-sm" style={{ color: 'var(--muted)' }}>{sub}</p>}</div>
-      <div>{right}</div>
-    </div>
-  );
+/** @deprecated use `<PageHeader>` — kept so existing pages keep compiling. */
+export function PageTitle(props: { title: string; sub?: string; right?: React.ReactNode }) {
+  const headerProps: PageHeaderProps = { title: props.title, subtitle: props.sub, actions: props.right };
+  return <PageHeader {...headerProps} />;
 }

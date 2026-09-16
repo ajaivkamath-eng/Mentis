@@ -25,6 +25,8 @@ jobs:
         working-directory: apps/web
       - run: npm run build
         working-directory: apps/web
+      - run: npm test
+        working-directory: apps/web
 
   mobile:
     runs-on: ubuntu-latest
@@ -35,6 +37,8 @@ jobs:
       - run: npm ci
         working-directory: apps/mobile
       - run: npm run typecheck
+        working-directory: apps/mobile
+      - run: npm run tokens:check
         working-directory: apps/mobile
 
   functions:

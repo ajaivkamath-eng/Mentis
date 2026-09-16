@@ -24,19 +24,19 @@ export function Today() {
       <div className="grid md:grid-cols-2 gap-4">
         <div className="card p-4">
           <h2 className="font-bold mb-2">Sessions</h2>
-          {sessions.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>No sessions today.</p>}
+          {sessions.length === 0 && <p className="text-sm" style={{ color: 'var(--ink-muted)' }}>No sessions today.</p>}
           {sessions.map((s) => (
-            <Link key={s.id} to={`/register/${s.id}`} className="flex justify-between items-center py-2 border-b last:border-0" style={{ borderColor: 'var(--line)' }}>
+            <Link key={s.id} to={`/register/${s.id}`} className="flex justify-between items-center py-2 border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
               <div><div className="font-semibold">{s.name}</div>
-                <div className="text-xs" style={{ color: 'var(--muted)' }}>{new Date(s.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {s.venues?.name} · {s.status}</div></div>
+                <div className="text-xs" style={{ color: 'var(--ink-muted)' }}>{new Date(s.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {s.venues?.name} · {s.status}</div></div>
               <span className="btn btn-ghost">Register</span>
             </Link>
           ))}
         </div>
         <div className="card p-4">
           <h2 className="font-bold mb-2">Open tasks</h2>
-          {tasks.map((t) => <div key={t.id} className="py-1 text-sm">• {t.title} <span style={{ color: 'var(--muted)' }}>({t.status})</span></div>)}
-          {tasks.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>All clear.</p>}
+          {tasks.map((t) => <div key={t.id} className="py-1 text-sm">• {t.title} <span style={{ color: 'var(--ink-muted)' }}>({t.status})</span></div>)}
+          {tasks.length === 0 && <p className="text-sm" style={{ color: 'var(--ink-muted)' }}>All clear.</p>}
         </div>
       </div>
     </div>
@@ -176,9 +176,9 @@ export function Register() {
                 <span className="font-bold text-lg w-8">{present ? '✓' : '○'}</span>
                 <span className="flex-1">
                   <span className="font-semibold">{r.name}</span>
-                  {r.taster && <span className="badge ml-2" style={{ background: 'var(--mentis-gold)', color: '#000' }}>Taster</span>}
-                  {r.alert && <span className="badge ml-2" style={{ background: 'var(--red)', color: '#fff' }}>⚠️</span>}
-                  <div className="text-xs" style={{ color: 'var(--muted)' }}>{r.customer} {r.phone && `· ${r.phone}`}</div>
+                  {r.taster && <span className="badge ml-2" style={{ background: 'var(--warning)', color: '#000' }}>Taster</span>}
+                  {r.alert && <span className="badge ml-2" style={{ background: 'var(--danger)', color: '#fff' }}>⚠️</span>}
+                  <div className="text-xs" style={{ color: 'var(--ink-muted)' }}>{r.customer} {r.phone && `· ${r.phone}`}</div>
                 </span>
                 {r.alert && <span className="btn btn-ghost" onClick={(e) => { e.stopPropagation(); openAlert(r.memberId); }}>Alert</span>}
                 {r.phone && <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="btn btn-ghost"><Phone size={16} /></a>}
@@ -260,7 +260,7 @@ export function Feedback() {
               {s.id === id ? '▸ ' : ''}{s.name} — {new Date(s.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {s.venues?.name}
             </Link>
           ))}
-          {todayList.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>No sessions today.</p>}
+          {todayList.length === 0 && <p className="text-sm" style={{ color: 'var(--ink-muted)' }}>No sessions today.</p>}
         </div>
         <div className="card p-4 flex flex-col gap-2">
           <select className="input" value={memberId} onChange={(e) => setMemberId(e.target.value)}>

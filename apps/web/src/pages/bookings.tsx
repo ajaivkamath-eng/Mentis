@@ -83,7 +83,7 @@ export function Bookings() {
         <tbody>{rows.map((b: any) => (
           <tr key={b.id}><td>{new Date(b.starts_at).toLocaleString()}</td><td className="font-semibold">{b.members?.name}</td>
             <td>{b.booking_slots?.mentis_staff?.display_name}</td>
-            <td><span className="badge" style={{ background: 'var(--line)' }}>{b.status}</span></td>
+            <td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{b.status}</span></td>
             <td className="flex gap-2">
               {b.status === 'booked' && <button className="btn btn-primary" onClick={() => approve(b)}>Approve</button>}
               {b.status === 'approved' && <button className="btn btn-ghost" onClick={() => setStatus(b, 'completed')}>Complete</button>}
