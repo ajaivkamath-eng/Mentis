@@ -32,8 +32,43 @@ cd apps/web && npm install && npm run dev   # http://localhost:5173
 cd apps/mobile && npm install && npx expo start
 ```
 
-Copy `apps/web/.env.example` to `.env` and point at your Supabase project
-(EU region — UK children's data stays in-region).
+## Web-only local dev checklist
+
+Use this when you only need the browser app locally and you are connecting it to Supabase.
+
+- [ ] Install prerequisites: Node 20+ (or the repo's pinned version), npm, Docker Desktop, and the Supabase CLI.
+- [ ] From the repo root, install the workspace deps:
+  ```bash
+  npm install
+  ```
+- [ ] Start the local Supabase stack and note the local API URL + anon key:
+  ```bash
+  supabase start
+  ```
+  This gives you the local API at `http://localhost:54321` and the local Studio at `http://localhost:54323`.
+- [ ] Copy `apps/web/.env.example` to `apps/web/.env` and fill in the local values:
+  ```env
+  VITE_SUPABASE_URL=http://localhost:54321
+  VITE_SUPABASE_ANON_KEY=<anon key from `supabase status`>
+  ```
+  For staging/production, replace the values with your real Supabase project URL and anon key instead.
+- [ ] Apply the schema + RLS to the local database:
+  ```bash
+  supabase db push
+  ```
+- [ ] Run the web app:
+  ```bash
+  cd apps/web
+  npm install
+  npm run dev
+  ```
+  Open `http://localhost:5173`.
+- [ ] Optional: if you need to test edge functions locally, run:
+  ```bash
+  supabase functions serve
+  ```
+
+This is the exact web-only local dev checklist for Mentis: install deps → start Supabase → copy `.env` → db push → run `npm run dev`.
 
 ## Supabase setup (staging + production)
 
