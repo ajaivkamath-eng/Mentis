@@ -73,7 +73,7 @@ export function Member360() {
             const cur = hist[hist.length - 1];
             return <div key={p} className="text-sm">{p}: <strong>#{cur.value}</strong> {move === 'up' ? '▲' : move === 'down' ? '▼' : '–'}</div>;
           })}
-          {plats.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>No rankings yet.</p>}
+          {plats.length === 0 && <p className="text-sm" style={{ color: 'var(--ink-muted)' }}>No rankings yet.</p>}
           <h3 className="font-bold mt-3 mb-1">Recent matches</h3>
           {matches.map((x) => <div key={x.id} className="text-sm">{x.played_on} vs {x.opponent}: <strong>{x.result}</strong></div>)}
         </div>
@@ -81,10 +81,10 @@ export function Member360() {
           <h3 className="font-bold mb-2">Goals</h3>
           {goals.map((g) => <div key={g.id} className="text-sm">• {g.description} <em>({g.status})</em></div>)}
           <h3 className="font-bold mt-3 mb-1">Feedback timeline</h3>
-          {feedback.map((f, i) => <div key={i} className="text-sm border-t py-1" style={{ borderColor: 'var(--line)' }}>{f.body} <span style={{ color: 'var(--muted)' }}>({new Date(f.created_at).toLocaleDateString()})</span></div>)}
+          {feedback.map((f, i) => <div key={i} className="text-sm border-t py-1" style={{ borderColor: 'var(--border)' }}>{f.body} <span style={{ color: 'var(--ink-muted)' }}>({new Date(f.created_at).toLocaleDateString()})</span></div>)}
         </div>
       </div>
-      <p className="text-xs mt-3" style={{ color: 'var(--muted)' }}>Under-18 validation: {validateMember(m as Member).join('; ') || 'OK'}</p>
+      <p className="text-xs mt-3" style={{ color: 'var(--ink-muted)' }}>Under-18 validation: {validateMember(m as Member).join('; ') || 'OK'}</p>
     </div>
   );
 }
@@ -146,12 +146,12 @@ export function Tasters() {
   return (
     <div>
       <PageTitle title="Tasters" sub="Requested → approved → attended → converted" right={
-        <span className="text-xs" style={{ color: 'var(--muted)' }}>Public form: {formUrl} (QR it at venues)</span>
+        <span className="text-xs" style={{ color: 'var(--ink-muted)' }}>Public form: {formUrl} (QR it at venues)</span>
       } />
       <div className="card p-2"><table className="grid">
         <thead><tr><th>Name</th><th>Age</th><th>Contact</th><th>Status</th><th>Approve → session</th><th></th></tr></thead>
         <tbody>{rows.map((t) => (
-          <tr key={t.id}><td className="font-semibold">{t.name}</td><td>{t.age}</td><td>{t.contact}</td><td><span className="badge" style={{ background: 'var(--line)' }}>{t.status}</span></td>
+          <tr key={t.id}><td className="font-semibold">{t.name}</td><td>{t.age}</td><td>{t.contact}</td><td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{t.status}</span></td>
             <td>{t.status === 'requested' && (
               <select className="input" style={{ width: 'auto' }} defaultValue="" onChange={(e) => approve(t, e.target.value)}>
                 <option value="">Assign…</option>{sessions.map((s: any) => <option key={s.id} value={s.id}>{s.name} {new Date(s.start_at).toLocaleDateString()}</option>)}

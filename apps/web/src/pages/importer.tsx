@@ -96,7 +96,7 @@ export function Importer() {
           <option value="matches">Matches</option><option value="rankings">Rankings</option>
         </select>
         <input type="file" accept=".csv" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
-        <span className="text-sm" style={{ color: 'var(--muted)' }}>
+        <span className="text-sm" style={{ color: 'var(--ink-muted)' }}>
           {kind === 'members' && 'Columns: name, dateOfBirth, customerName, customerPhone, nokName, nokPhone, tteNumber, handedness, playingStyle'}
           {kind === 'diary' && 'Columns: name, startsOn, endsOn, location, source, externalRef'}
           {kind === 'matches' && 'Columns: memberName, date, opponent, gamesFor (11-9-7), gamesAgainst, result (W/L/D), source, sessionId?'}
@@ -106,7 +106,7 @@ export function Importer() {
       {rows.length > 0 && (
         <div className="card p-4 mb-4">
           <div className="text-sm mb-2">{rows.length} rows parsed · {errors.length} errors</div>
-          {errors.slice(0, 10).map((e, i) => <div key={i} className="text-sm" style={{ color: 'var(--red)' }}>Row {e.row}: {e.message}</div>)}
+          {errors.slice(0, 10).map((e, i) => <div key={i} className="text-sm" style={{ color: 'var(--danger)' }}>Row {e.row}: {e.message}</div>)}
           <button className="btn btn-primary mt-2" onClick={commit}>Commit valid rows</button>
           {done && <p className="text-sm mt-2">{done}</p>}
         </div>

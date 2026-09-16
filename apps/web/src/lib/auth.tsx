@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import { can, switchableRoles, type Permission, type Role } from '@mentis/core';
+import { DEMO_USER_ID, demoStaff, endDemoSession, isDemoSession } from './demo';
 
 export interface StaffRow { id: string; organization_id: string; user_id: string; roles: Role[]; display_name: string }
 
@@ -24,6 +25,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Design-review mode: a local, backend-free Super Admin session.
+    if (isDemoSession()) {
+      setUserId(DEMO_USER_ID);
+      return;
+    }
     supabase.auth.getSession().then(({ data }) => setUserId(data.session?.user.id ?? null));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setUserId(s?.user.id ?? null));
     return () => sub.subscription.unsubscribe();
@@ -31,6 +37,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!userId) { setStaff(null); setRole(null); setLoading(false); return; }
+    if (isDemoSession()) {
+      setStaff(demoStaff);
+      setRole((r) => r ?? (switchableRoles(demoStaff.roles)[0] ?? null));
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     supabase.from('mentis_staff').select('*').eq('user_id', userId).limit(1).single()
       .then(({ data }) => {
@@ -43,7 +55,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthState>(() => ({
     userId, staff, role, roles: staff?.roles ?? [], loading,
     setRole, canDo: (p) => (role ? can(role, p) : false),
-    signOut: async () => { await supabase.auth.signOut(); },
+    signOut: async () => {
+      if (isDemoSession()) {
+        endDemoSession();
+        window.location.href = '/login';
+        return;
+      }
+      await supabase.auth.signOut();
+    },
   }), [userId, staff, role, loading]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

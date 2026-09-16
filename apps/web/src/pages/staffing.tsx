@@ -70,7 +70,7 @@ export function Staffing() {
             <td><button className="btn btn-ghost" onClick={() => remove(r.id)}>Remove</button></td></tr>
         ))}</tbody>
       </table></div>
-      <p className="text-xs mt-2" style={{ color: 'var(--muted)' }}>Org: {staff?.organization_id}</p>
+      <p className="text-xs mt-2" style={{ color: 'var(--ink-muted)' }}>Org: {staff?.organization_id}</p>
     </div>
   );
 }

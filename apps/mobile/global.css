@@ -1,2 +1,100 @@
-@import "tailwindcss";
-/* Mentis mobile tokens mirror apps/web/src/app.css */
+@import 'tailwindcss';
+
+/* ==========================================================================
+   Mentis Design System v2 — "Deep Court" (native token contract)
+   --------------------------------------------------------------------------
+   These custom properties are the native twin of apps/web/src/app.css and are
+   what NativeWind classNames resolve against. Both files are generated from
+   packages/core/src/tokens.ts and asserted by tests/design_tokens.test.ts, so
+   "same colour on both platforms" is a CI guarantee, not a promise.
+
+   The RN component kit also imports the tokens directly (lib/theme.ts) so that
+   animations and SVG work can use the same numbers without a CSS round-trip.
+   ========================================================================== */
+
+:root {
+  --bg: #f4f7fc;
+  --bg-subtle: #e9eef7;
+  --surface: #ffffff;
+  --surface-hover: #f7f9fc;
+  --surface-raised: #ffffff;
+  --surface-inset: #f1f5fa;
+  --glass: rgba(255, 255, 255, 0.72);
+  --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --ink: #0b1220;
+  --ink-muted: #54607a;
+  --ink-faint: #7b869c;
+  --brand: #0d9488;
+  --brand-hover: #0f766e;
+  --brand-press: #115e59;
+  --brand-ink: #f0fdfa;
+  --brand-soft: rgba(13, 148, 136, 0.1);
+  --brand-text: #0f766e;
+  --accent: #d97706;
+  --accent-soft: rgba(217, 119, 6, 0.1);
+  --success: #059669;
+  --success-soft: rgba(5, 150, 105, 0.1);
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.1);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.09);
+  --info: #2563eb;
+  --info-soft: rgba(37, 99, 235, 0.09);
+  --ring: rgba(13, 148, 136, 0.55);
+  --scrim: rgba(11, 18, 32, 0.42);
+  --sheen: rgba(255, 255, 255, 0.9);
+  --chart-1: #0d9488;
+  --chart-2: #4f46e5;
+  --chart-3: #d97706;
+  --chart-4: #dc2626;
+  --chart-5: #2563eb;
+}
+
+.dark {
+  --bg: #060b16;
+  --bg-subtle: #04070f;
+  --surface: #0c1628;
+  --surface-hover: #122036;
+  --surface-raised: #132039;
+  --surface-inset: #080e1c;
+  --glass: rgba(12, 22, 40, 0.62);
+  --border: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.26);
+  --ink: #eef2f9;
+  --ink-muted: #9aa8bd;
+  --ink-faint: #6c7b93;
+  --brand: #14b8a6;
+  --brand-hover: #2dd4bf;
+  --brand-press: #0d9488;
+  --brand-ink: #04211d;
+  --brand-soft: rgba(20, 184, 166, 0.14);
+  --brand-text: #5eead4;
+  --accent: #fbbf24;
+  --accent-soft: rgba(251, 191, 36, 0.14);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.14);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.14);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.15);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.14);
+  --ring: rgba(45, 212, 191, 0.65);
+  --scrim: rgba(3, 6, 14, 0.72);
+  --sheen: rgba(255, 255, 255, 0.06);
+  --chart-1: #2dd4bf;
+  --chart-2: #818cf8;
+  --chart-3: #fbbf24;
+  --chart-4: #f87171;
+  --chart-5: #60a5fa;
+}
+
+@layer base {
+  /* NativeWind resolves these for className usage; the RN kit uses StyleSheet. */
+  :root {
+    --font-sans: 'Inter';
+    --font-display: 'Plus Jakarta Sans';
+    --font-mono: 'Menlo';
+  }
+}

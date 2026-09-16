@@ -72,7 +72,7 @@ export function Groups() {
         </select>
         <button className="btn btn-primary" onClick={save}>Add group</button>
       </div>
-      <div className="card p-4">{rows.map((g: any) => <div key={g.id} className="py-1 text-sm">• {g.name} <span style={{ color: 'var(--muted)' }}>{g.venues?.name ?? 'org-wide'}</span></div>)}</div>
+      <div className="card p-4">{rows.map((g: any) => <div key={g.id} className="py-1 text-sm">• {g.name} <span style={{ color: 'var(--ink-muted)' }}>{g.venues?.name ?? 'org-wide'}</span></div>)}</div>
     </div>
   );
 }

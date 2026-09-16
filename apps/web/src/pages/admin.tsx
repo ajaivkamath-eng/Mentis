@@ -19,10 +19,10 @@ export function Login() {
     <div className="dark flex items-center justify-center" style={{ minHeight: '100vh' }}>
       <div className="card p-6" style={{ width: 380 }}>
         <h1 className="text-2xl font-black mb-1">Mentis</h1>
-        <p className="text-sm mb-4" style={{ color: 'var(--muted)' }}>Kingfisher TTC — sign in with your Rally account</p>
+        <p className="text-sm mb-4" style={{ color: 'var(--ink-muted)' }}>Kingfisher TTC — sign in with your Rally account</p>
         <input className="input mb-2" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
         <input className="input mb-3" type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} />
-        {err && <p className="text-sm mb-2" style={{ color: 'var(--red)' }}>{err}</p>}
+        {err && <p className="text-sm mb-2" style={{ color: 'var(--danger)' }}>{err}</p>}
         <button className="btn btn-primary w-full justify-center" onClick={go}>Sign in</button>
       </div>
     </div>
@@ -52,10 +52,10 @@ export function Dashboard() {
     <div>
       <PageTitle title={`Welcome, ${staff?.display_name ?? ''}`} sub={`Active role: ${role}`} />
       <div className="grid md:grid-cols-4 gap-4">
-        <Link to="/members" className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Members</div><div className="text-2xl font-black">{stats.members}</div></Link>
-        <Link to="/tasters" className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Taster requests</div><div className="text-2xl font-black">{stats.tasters}</div><div className="text-xs" style={{ color: 'var(--muted)' }}>tried {stats.funnel.tried ?? 0} · converted {stats.funnel.converted ?? 0}</div></Link>
-        <Link to="/inbox" className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Breached actions</div><div className="text-2xl font-black">{stats.breached}</div></Link>
-        <Link to="/charges" className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Outstanding debits</div><div className="text-2xl font-black">£{(stats.debits / 100).toFixed(2)}</div></Link>
+        <Link to="/members" className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Members</div><div className="text-2xl font-black">{stats.members}</div></Link>
+        <Link to="/tasters" className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Taster requests</div><div className="text-2xl font-black">{stats.tasters}</div><div className="text-xs" style={{ color: 'var(--ink-muted)' }}>tried {stats.funnel.tried ?? 0} · converted {stats.funnel.converted ?? 0}</div></Link>
+        <Link to="/inbox" className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Breached actions</div><div className="text-2xl font-black">{stats.breached}</div></Link>
+        <Link to="/charges" className="card p-4"><div className="text-sm" style={{ color: 'var(--ink-muted)' }}>Outstanding debits</div><div className="text-2xl font-black">£{(stats.debits / 100).toFixed(2)}</div></Link>
       </div>
       {role === 'COACH' && <div className="card p-4 mt-4"><Link to="/today" className="btn btn-primary">Open today's sessions</Link></div>}
       {role === 'SPARRER' && <div className="card p-4 mt-4 text-sm">Your assigned sessions are under <Link to="/today" className="underline">Today</Link>. Registers are read-only for sparrers.</div>}
@@ -95,8 +95,8 @@ export function SearchPage() {
       <PageTitle title="Global search" sub="Results respect your role (RLS)" />
       <input className="input mb-3" placeholder="Members, customers, sessions, tasks, events…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="card p-2">{results.map((r: any) => (
-        <Link key={`${r.kind}-${r.id}`} to={link(r)} className="flex gap-2 py-2 border-b last:border-0 px-2" style={{ borderColor: 'var(--line)' }}>
-          <span className="badge" style={{ background: 'var(--line)' }}>{r.kind}</span><span className="font-semibold">{r.title}</span>
+        <Link key={`${r.kind}-${r.id}`} to={link(r)} className="flex gap-2 py-2 border-b last:border-0 px-2" style={{ borderColor: 'var(--border)' }}>
+          <span className="badge" style={{ background: 'var(--surface-inset)' }}>{r.kind}</span><span className="font-semibold">{r.title}</span>
         </Link>))}
       </div>
     </div>
