@@ -48,32 +48,32 @@ insert into mentis_staff (organization_id, user_id, roles, display_name) values
   ('00000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000004', array['SPARRER']::mentis_role[], 'T Sparrer')
 on conflict (organization_id, user_id) do update set roles = excluded.roles;
 
-insert into venues (id, organization_id, name) values
+insert into mentis_venues (id, organization_id, name) values
   ('b0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'RLS Hall')
 on conflict (id) do nothing;
-insert into customers (id, organization_id, name, phone) values
+insert into mentis_customers (id, organization_id, name, phone) values
   ('c0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'RLS Parent', '07000')
 on conflict (id) do nothing;
-insert into members (id, organization_id, customer_id, name, date_of_birth, nok_name, nok_phone, special_needs_flag) values
+insert into mentis_members (id, organization_id, customer_id, name, date_of_birth, nok_name, nok_phone, special_needs_flag) values
   ('d0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'RLS Kid', '2015-06-01', 'RLS Parent', '07000', true)
 on conflict (id) do nothing;
-insert into member_medical (member_id, notes) values ('d0000000-0000-0000-0000-000000000001', 'test note')
+insert into mentis_member_medical (member_id, notes) values ('d0000000-0000-0000-0000-000000000001', 'test note')
 on conflict (member_id) do nothing;
-insert into sessions (id, organization_id, venue_id, name, start_at, end_at, status) values
+insert into mentis_sessions (id, organization_id, venue_id, name, start_at, end_at, status) values
   ('e0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS Session', '2026-03-03T18:00:00Z', '2026-03-03T19:00:00Z', 'scheduled')
 on conflict (id) do nothing;
-insert into enrollments (session_id, member_id, status, expected) values
+insert into mentis_enrollments (session_id, member_id, status, expected) values
   ('e0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', 'active', true)
 on conflict (session_id, member_id) do nothing;
-insert into rate_cards (organization_id, staff_id, label, rate_cents, valid_from)
+insert into mentis_rate_cards (organization_id, staff_id, label, rate_cents, valid_from)
   select '00000000-0000-0000-0000-000000000001', ms.id, 'std', 2000, '2026-01-01'
   from mentis_staff ms
   where ms.user_id in ('a0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000004')
-    and not exists (select 1 from rate_cards rc where rc.staff_id = ms.id);
-insert into session_staffing (session_id, staff_id, capacity, rate_card_id, planned_start, planned_end)
+    and not exists (select 1 from mentis_rate_cards rc where rc.staff_id = ms.id);
+insert into mentis_session_staffing (session_id, staff_id, capacity, rate_card_id, planned_start, planned_end)
   select 'e0000000-0000-0000-0000-000000000001', ms.id,
     case when ms.user_id = 'a0000000-0000-0000-0000-000000000003' then 'lead' else 'sparrer' end,
-    (select rc.id from rate_cards rc where rc.staff_id = ms.id limit 1),
+    (select rc.id from mentis_rate_cards rc where rc.staff_id = ms.id limit 1),
     '2026-03-03T18:00:00Z', '2026-03-03T19:00:00Z'
   from mentis_staff ms
   where ms.user_id in ('a0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000004')
@@ -81,59 +81,59 @@ on conflict (session_id, staff_id, capacity) do nothing;
 
 -- 1. Medical visibility (rule 3) ----------------------------------------------
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000003');
-select mentis_test_ok('coach sees assigned medical', exists (select 1 from member_medical where member_id = 'd0000000-0000-0000-0000-000000000001'));
+select mentis_test_ok('coach sees assigned medical', exists (select 1 from mentis_member_medical where member_id = 'd0000000-0000-0000-0000-000000000001'));
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000004');
-select mentis_test_ok('sparrer sees own-session medical', exists (select 1 from member_medical where member_id = 'd0000000-0000-0000-0000-000000000001'));
+select mentis_test_ok('sparrer sees own-session medical', exists (select 1 from mentis_member_medical where member_id = 'd0000000-0000-0000-0000-000000000001'));
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000002');
-select mentis_test_ok('admin sees medical', exists (select 1 from member_medical));
+select mentis_test_ok('admin sees medical', exists (select 1 from mentis_member_medical));
 
 -- 2. Sparrer register is read-only ---------------------------------------------
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000004');
 select mentis_test_must_fail('sparrer cannot write attendance',
-  $$ insert into attendance_records (session_id, member_id, status, recorded_by)
+  $$ insert into mentis_attendance_records (session_id, member_id, status, recorded_by)
      values ('e0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', 'present', 'a0000000-0000-0000-0000-000000000004') $$);
 
 -- 3. Coach marks own session ----------------------------------------------------
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000003');
-insert into attendance_records (session_id, member_id, status, recorded_by)
+insert into mentis_attendance_records (session_id, member_id, status, recorded_by)
   values ('e0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', 'present', 'a0000000-0000-0000-0000-000000000003');
 select mentis_test_ok('coach marks own register', exists (
-  select 1 from attendance_records where recorded_by = 'a0000000-0000-0000-0000-000000000003'));
+  select 1 from mentis_attendance_records where recorded_by = 'a0000000-0000-0000-0000-000000000003'));
 
 -- 4. Task approval separation (rule 5) -------------------------------------------
 select mentis_test_clear_uid();
-insert into tasks (id, organization_id, title, task_type, assignee_id, status)
+insert into mentis_tasks (id, organization_id, title, task_type, assignee_id, status)
   values ('f0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'RLS Task', 'other',
     (select id from mentis_staff where user_id = 'a0000000-0000-0000-0000-000000000003'), 'done')
 on conflict (id) do nothing;
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000003');
 select mentis_test_must_fail('coach cannot self-approve task',
-  $$ update tasks set approved_at = now() where id = 'f0000000-0000-0000-0000-000000000001' $$);
+  $$ update mentis_tasks set approved_at = now() where id = 'f0000000-0000-0000-0000-000000000001' $$);
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000002');
-update tasks set approved_at = now() where id = 'f0000000-0000-0000-0000-000000000001';
+update mentis_tasks set approved_at = now() where id = 'f0000000-0000-0000-0000-000000000001';
 select mentis_test_ok('admin approves task', exists (
-  select 1 from tasks where id = 'f0000000-0000-0000-0000-000000000001' and approved_at is not null));
+  select 1 from mentis_tasks where id = 'f0000000-0000-0000-0000-000000000001' and approved_at is not null));
 
 -- 5. Billing lock (rule 6) --------------------------------------------------------
 select mentis_test_clear_uid();
-insert into invoices (id, organization_id, staff_id, period_start, period_end, status, created_by)
+insert into mentis_invoices (id, organization_id, staff_id, period_start, period_end, status, created_by)
   values ('f0000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001',
     (select id from mentis_staff where user_id = 'a0000000-0000-0000-0000-000000000003'),
     '2026-01-01', '2026-01-10', 'draft', 'a0000000-0000-0000-0000-000000000003')
 on conflict (id) do nothing;
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000002');
-update invoices set status = 'approved', approved_by = 'a0000000-0000-0000-0000-000000000002' where id = 'f0000000-0000-0000-0000-000000000002';
+update mentis_invoices set status = 'approved', approved_by = 'a0000000-0000-0000-0000-000000000002' where id = 'f0000000-0000-0000-0000-000000000002';
 select mentis_test_must_fail('approved invoice is locked',
-  $$ update invoices set status = 'draft' where id = 'f0000000-0000-0000-0000-000000000002' $$);
+  $$ update mentis_invoices set status = 'draft' where id = 'f0000000-0000-0000-0000-000000000002' $$);
 
 -- 6. Venue concurrency (rule 17) + back-to-back ------------------------------------
 select mentis_test_clear_uid();
 select mentis_test_must_fail('venue overlap blocked',
-  $$ insert into sessions (organization_id, venue_id, name, start_at, end_at)
+  $$ insert into mentis_sessions (organization_id, venue_id, name, start_at, end_at)
      values ('00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS Clash', '2026-03-03T18:30:00Z', '2026-03-03T19:30:00Z') $$);
-insert into sessions (organization_id, venue_id, name, start_at, end_at)
+insert into mentis_sessions (organization_id, venue_id, name, start_at, end_at)
   values ('00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS BackToBack', '2026-03-03T19:00:00Z', '2026-03-03T20:00:00Z');
-select mentis_test_ok('back-to-back allowed', exists (select 1 from sessions where name = 'RLS BackToBack'));
+select mentis_test_ok('back-to-back allowed', exists (select 1 from mentis_sessions where name = 'RLS BackToBack'));
 
 -- 7. Staff management is super-admin-only -------------------------------------------
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000001');

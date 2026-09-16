@@ -8,7 +8,7 @@ export function PublicTaster() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [done, setDone] = useState('');
   useEffect(() => {
-    supabase.from('sessions').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(10).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_sessions').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(10).then(({ data }) => setSessions(data ?? []));
   }, []);
   const submit = async () => {
     const r = await fetch(functionsUrl('taster-form'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -124,7 +124,7 @@ export function Booking12() {
   const [mine, setMine] = useState<any[]>([]);
   const [msg, setMsg] = useState('');
   useEffect(() => {
-    supabase.from('booking_slots').select('*,venues(name),mentis_staff!booking_slots_coach_id_fkey(display_name)').eq('status', 'open').then(({ data }) => setSlots(data ?? []));
+    supabase.from('mentis_booking_slots').select('*,mentis_venues(name),mentis_staff!booking_slots_coach_id_fkey(display_name)').eq('status', 'open').then(({ data }) => setSlots(data ?? []));
   }, []);
   const book = async () => {
     const slot = slots.find((s: any) => s.id === form.slotId);

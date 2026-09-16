@@ -14,9 +14,9 @@ export function Today() {
   useEffect(() => {
     if (!staff) return;
     const day = new Date().toISOString().slice(0, 10);
-    supabase.from('sessions').select('id,name,start_at,end_at,venue_id,status,venues(name)')
+    supabase.from('mentis_sessions').select('id,name,start_at,end_at,venue_id,status,mentis_venues(name)')
       .gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at').then(({ data }) => setSessions(data ?? []));
-    supabase.from('tasks').select('id,title,due_at,status').eq('assignee_id', staff.id).neq('status', 'done').then(({ data }) => setTasks(data ?? []));
+    supabase.from('mentis_tasks').select('id,title,due_at,status').eq('assignee_id', staff.id).neq('status', 'done').then(({ data }) => setTasks(data ?? []));
   }, [staff]);
   return (
     <div>
@@ -62,17 +62,17 @@ export function Register() {
 
   useEffect(() => {
     (async () => {
-      const { data: session } = await supabase.from('sessions').select('name').eq('id', id).single();
+      const { data: session } = await supabase.from('mentis_sessions').select('name').eq('id', id).single();
       setSessionName(session?.name ?? '');
-      const { data: enroll } = await supabase.from('enrollments')
-        .select('id,member_id,status,members(id,name,special_needs_flag,customers(name,phone))')
+      const { data: enroll } = await supabase.from('mentis_enrollments')
+        .select('id,member_id,status,mentis_members(id,name,special_needs_flag,mentis_customers(name,phone))')
         .eq('session_id', id).in('status', ['active', 'invited']).eq('expected', true);
       const list: Row[] = (enroll ?? []).map((e: any) => ({
         enrollmentId: e.id, memberId: e.member_id, name: e.members?.name ?? '—',
         customer: e.members?.customers?.name, phone: e.members?.customers?.phone,
         alert: !!e.members?.special_needs_flag,
       }));
-      const { data: tasters } = await supabase.from('prospects').select('id,name').eq('status', 'approved');
+      const { data: tasters } = await supabase.from('mentis_prospects').select('id,name').eq('status', 'approved');
       for (const t of (tasters ?? []).filter((t: any) => true)) {
         list.push({ enrollmentId: `t-${t.id}`, memberId: '', name: t.name, alert: false, taster: true, tasterId: t.id });
       }
@@ -83,7 +83,7 @@ export function Register() {
         recordedBy: staff?.id ?? '', offline: !navigator.onLine,
       }));
       setState(createRegister(records));
-      supabase.from('members').select('id,name').order('name').then(({ data }) => setAllMembers(data ?? []));
+      supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setAllMembers(data ?? []));
     })();
   }, [id, staff?.id]);
 
@@ -99,11 +99,11 @@ export function Register() {
   const openAlert = async (memberId: string) => {
     setAlertFor(memberId);
     if (!medical[memberId]) {
-      const { data } = await supabase.from('member_medical').select('notes').eq('member_id', memberId).single();
+      const { data } = await supabase.from('mentis_member_medical').select('notes').eq('member_id', memberId).single();
       if (data) setMedical((m) => ({ ...m, [memberId]: data.notes }));
-      await supabase.from('audit_log').insert({
+      await supabase.from('mentis_audit_log').insert({
         organization_id: staff?.organization_id, actor_id: staff?.user_id,
-        action: 'medical.read', entity: 'member_medical', entity_id: memberId,
+        action: 'medical.read', entity: 'mentis_member_medical', entity_id: memberId,
       });
     }
   };
@@ -111,7 +111,7 @@ export function Register() {
   const save = async () => {
     const ops = dedupeQueue(state.queue);
     for (const op of ops) {
-      await supabase.from('attendance_records').insert({
+      await supabase.from('mentis_attendance_records').insert({
         session_id: id, member_id: op.record.memberId || null,
         taster_name: op.record.tasterId ? rows.find((r) => r.tasterId === op.record.tasterId)?.name : null,
         status: op.record.status, recorded_by: staff?.user_id, offline: op.record.offline,
@@ -219,11 +219,11 @@ export function Feedback() {
   const [withPlayers, setWithPlayers] = useState<string[]>([]);
   const [done, setDone] = useState('');
   useEffect(() => {
-    supabase.from('enrollments').select('member_id,members(id,name)').eq('session_id', id).then(({ data }) =>
-      setMembers((data ?? []).map((e: any) => e.members)));
-    supabase.from('session_staffing').select('staff_id,mentis_staff(display_name)').eq('session_id', id).then(({ data }) => setStaffing(data ?? []));
+    supabase.from('mentis_enrollments').select('member_id,mentis_members(id,name)').eq('session_id', id).then(({ data }) =>
+      setMembers((data ?? []).map((e: any) => e.mentis_members)));
+    supabase.from('mentis_session_staffing').select('staff_id,mentis_staff(display_name)').eq('session_id', id).then(({ data }) => setStaffing(data ?? []));
     const day = new Date().toISOString().slice(0, 10);
-    supabase.from('sessions').select('id,name,start_at,venues(name)').gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at')
+    supabase.from('mentis_sessions').select('id,name,start_at,mentis_venues(name)').gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at')
       .then(({ data }) => setTodayList(data ?? []));
     try {
       navigator.geolocation?.getCurrentPosition(() => { /* venue proximity when venue coords exist */ }, () => {});
@@ -231,7 +231,7 @@ export function Feedback() {
   }, [id]);
   const repeatLast = async () => {
     if (!memberId) return;
-    const { data } = await supabase.from('player_feedback').select('body').eq('member_id', memberId).order('created_at', { ascending: false }).limit(1).single();
+    const { data } = await supabase.from('mentis_player_feedback').select('body').eq('member_id', memberId).order('created_at', { ascending: false }).limit(1).single();
     if (data) setText(data.body);
   };
   const chip = (phrase: string, suggested?: Record<string, number>) => {
@@ -240,7 +240,7 @@ export function Feedback() {
   };
   const submit = async () => {
     if (!memberId) { setDone('Pick a member first.'); return; }
-    await supabase.from('player_feedback').insert({
+    await supabase.from('mentis_player_feedback').insert({
       organization_id: staff?.organization_id, member_id: memberId, coach_id: staff?.id,
       body: text, source_type: source, session_id: source === 'session' ? id : null,
       event_id: source === 'event' ? id : null, ratings,

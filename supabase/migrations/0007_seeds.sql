@@ -1,15 +1,15 @@
--- Mentis staging seeds: Kingfisher TTC (2 venues), table-tennis profile,
+-- Mentis staging seeds: Kingfisher TTC (2 mentis_venues), table-tennis profile,
 -- action types, UK bank holidays. Demo users are created in Rally (shared
 -- auth); link them via mentis_staff rows — see supabase/seed_staff.sql.
-insert into organizations (id, name) values
+insert into mentis_organizations (id, name) values
   ('00000000-0000-0000-0000-000000000001', 'Kingfisher Table Tennis Club')
 on conflict (id) do nothing;
 
-insert into venues (organization_id, name, address, concurrent_session_limit) values
+insert into mentis_venues (organization_id, name, address, concurrent_session_limit) values
   ('00000000-0000-0000-0000-000000000001', 'Kingfisher Hall A', 'London, UK', 1),
   ('00000000-0000-0000-0000-000000000001', 'Kingfisher Hall B', 'London, UK', 1);
 
-insert into sport_profiles (organization_id, name, rank_system, feedback_attributes, playing_styles, equipment_guide, session_templates, group_templates) values
+insert into mentis_sport_profiles (organization_id, name, rank_system, feedback_attributes, playing_styles, equipment_guide, session_templates, group_templates) values
   ('00000000-0000-0000-0000-000000000001', 'Table Tennis',
    '{"type":"band","levels":["Beginner","Foundation","Intermediate","Advanced","Elite"]}',
    '{"skill":["forehand","backhand","serve","footwork","receiving"],"focus":["concentration","composure under pressure"],"behaviour":["discipline","sportsmanship","coachability","communication/team attitude"],"progression":["improvement vs previous","consistency","response to training","goal achievement"]}',
@@ -19,7 +19,7 @@ insert into sport_profiles (organization_id, name, rank_system, feedback_attribu
    '["Beginners","Intermediates","Squad","Adults"]')
 on conflict (organization_id, name) do nothing;
 
-insert into action_types (organization_id, name, trigger, due_offset, breach_offset) values
+insert into mentis_action_types (organization_id, name, trigger, due_offset, breach_offset) values
   ('00000000-0000-0000-0000-000000000001', 'name replacement staff', 'event', make_interval(days => 30), make_interval(days => 7)),
   ('00000000-0000-0000-0000-000000000001', 'confirm staffing', 'event', make_interval(days => 14), make_interval(days => 7)),
   ('00000000-0000-0000-0000-000000000001', 'clear outstanding debit', 'event', make_interval(days => 14), make_interval(days => 7)),
@@ -28,7 +28,7 @@ insert into action_types (organization_id, name, trigger, due_offset, breach_off
 on conflict (organization_id, name) do nothing;
 
 -- UK bank holidays (admin-editable) + term-holiday week samples.
-insert into holiday_calendar (organization_id, name, kind, starts_on, ends_on) values
+insert into mentis_holiday_calendar (organization_id, name, kind, starts_on, ends_on) values
   ('00000000-0000-0000-0000-000000000001', 'New Year''s Day', 'bank_holiday', '2026-01-01', '2026-01-01'),
   ('00000000-0000-0000-0000-000000000001', 'Good Friday', 'bank_holiday', '2026-04-03', '2026-04-03'),
   ('00000000-0000-0000-0000-000000000001', 'Easter Monday', 'bank_holiday', '2026-04-06', '2026-04-06'),
