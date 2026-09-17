@@ -39,7 +39,6 @@ WHERE organization_id IS NULL OR organization_id <> '00000000-0000-0000-0000-000
 
 -- 3) Re-link staff rows to the org and keep roles consistent.
 INSERT INTO public.mentis_staff (organization_id, user_id, roles, display_name) VALUES
-  ('00000000-0000-0000-0000-000000000001', 'be474d37-90d7-4807-a5ce-28882dff3e2f', ARRAY['SUPER_ADMIN']::public.mentis_role[], 'Ajai Kamath'),
   ('00000000-0000-0000-0000-000000000001', '0442d43f-4fd2-4601-9e21-36d76e5f542e', ARRAY['COACH']::public.mentis_role[], 'Jack'),
   ('00000000-0000-0000-0000-000000000001', '171cf5d2-9a8b-4603-83d1-d6d7d035edaf', ARRAY['COACH']::public.mentis_role[], 'Richard'),
   ('00000000-0000-0000-0000-000000000001', '39ddd06f-dd1b-4728-8338-462dcbfec13a', ARRAY['COACH']::public.mentis_role[], 'Ajay'),
@@ -55,7 +54,8 @@ INSERT INTO public.mentis_staff (organization_id, user_id, roles, display_name) 
   ('00000000-0000-0000-0000-000000000001', 'e725980b-f092-422c-8c30-001e559a949a', ARRAY['SPARRER']::public.mentis_role[], 'Ethan'),
   ('00000000-0000-0000-0000-000000000001', 'f03c0e26-7601-4d77-9496-b1bd289980a0', ARRAY['SPARRER']::public.mentis_role[], 'Mason'),
   ('00000000-0000-0000-0000-000000000001', 'fa6f0ced-08dd-43cf-a1d7-4a46b9ba36ff', ARRAY['ADMIN']::public.mentis_role[], 'Martin'),
-  ('00000000-0000-0000-0000-000000000001', 'fd2bf0bd-05a5-4a66-be8e-a9a38ac7164d', ARRAY['COACH']::public.mentis_role[], 'Oliver')
+  ('00000000-0000-0000-0000-000000000001', 'fd2bf0bd-05a5-4a66-be8e-a9a38ac7164d', ARRAY['COACH']::public.mentis_role[], 'Oliver'),
+  ('00000000-0000-0000-0000-000000000001', 'be474d37-90d7-4807-a5ce-28882dff3e2f', ARRAY['SUPER_ADMIN']::public.mentis_role[], 'Ajai Kamath'),
 ON CONFLICT (organization_id, user_id) DO UPDATE
 SET roles = EXCLUDED.roles,
     display_name = EXCLUDED.display_name;
