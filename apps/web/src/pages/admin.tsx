@@ -5,13 +5,35 @@ import { useAuth } from '../lib/auth';
 import { PageTitle } from '../lib/ui';
 import { rankResults, coachHours, tasterFunnel, csvOf, exportToCSV, anonymiseMember } from '@mentis/core';
 
+const LAST_LOGIN_EMAIL_KEY = 'mentis.lastLoginEmail';
+
 /* ---------- Login (Supabase Auth — same credentials as Rally) ---------- */
 export function Login() {
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return window.localStorage.getItem(LAST_LOGIN_EMAIL_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
   const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const trimmed = email.trim();
+      if (trimmed) window.localStorage.setItem(LAST_LOGIN_EMAIL_KEY, trimmed);
+      else window.localStorage.removeItem(LAST_LOGIN_EMAIL_KEY);
+    } catch {
+      /* ignore private-mode / quota errors */
+    }
+  }, [email]);
+
   const go = async () => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const trimmedEmail = email.trim();
+    const { error } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
     if (error) setErr(error.message);
     else window.location.href = '/';
   };

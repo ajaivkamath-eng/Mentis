@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../lib/theme';
 import { AppShell } from '../components/layout/app-shell';
 import { CommandPaletteProvider } from '../components/patterns/command-palette';
+import { Login } from '../pages/admin';
 
 /* -------------------------------------------------------------------------- *
  * The shell is the one component every page inherits, so it is worth testing
@@ -71,6 +72,27 @@ describe('AppShell', () => {
     signOut.mockClear();
     localStorage.clear();
     document.documentElement.classList.remove('dark');
+  });
+
+  it('remembers the last login email and prepopulates it on the sign-in form', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem('mentis.lastLoginEmail', 'saved@example.com');
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>,
+    );
+
+    const emailInput = screen.getByPlaceholderText('Email');
+    expect(emailInput).toHaveValue('saved@example.com');
+
+    await user.clear(emailInput);
+    await user.type(emailInput, 'updated@example.com');
+
+    await waitFor(() => {
+      expect(localStorage.getItem('mentis.lastLoginEmail')).toBe('updated@example.com');
+    });
   });
 
   it('renders the brand, grouped navigation and the signed-in user', () => {

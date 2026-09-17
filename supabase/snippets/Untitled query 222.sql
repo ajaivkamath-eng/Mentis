@@ -6,7 +6,9 @@ select auth.uid() as current_user;
 
 select * from auth.user;
 
+select * from mentis_venues;
 
+SELECT id FROM public.mentis_organizations WHERE name = 'Kingfisher Table Tennis Club' LIMIT 1
 
 do $$
 declare
