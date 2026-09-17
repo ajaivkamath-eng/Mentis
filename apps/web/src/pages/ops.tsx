@@ -1,105 +1,846 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { supabase, functionsUrl } from '../lib/supabase';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  MapPin,
+  CalendarDays,
+  Search,
+  Plus,
+  Download,
+  Users,
+  Check,
+  X,
+  Clock,
+  AlertTriangle,
+  FileSpreadsheet,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  MoreHorizontal,
+  Sparkles,
+  BookOpen,
+  Timer,
+  Ban,
+  CheckCheck,
+  UserPlus,
+} from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
-import { PageTitle } from '../lib/ui';
+import { PageHeader } from '../components/patterns/page-header';
+import { Button } from '../components/ui/button';
+import { InputWithIcon } from '../components/ui/input';
+import { Badge } from '../components/ui/badge';
+import { demoEnabled } from '../lib/demo';
+import { cn } from '../lib/cn';
 
-/* ---------- Sessions + cancellation/postponement ---------- */
-export function Sessions() {
-  const { staff, canDo } = useAuth();
-  const [rows, setRows] = useState<any[]>([]);
-  const [form, setForm] = useState({ name: '', venue_id: '', start_at: '', end_at: '' });
-  const [venues, setVenues] = useState<any[]>([]);
-  const load = () => {
-    supabase.from('mentis_sessions').select('id,name,start_at,end_at,status,mentis_venues(name)').order('start_at', { ascending: false }).limit(50).then(({ data }) => setRows(data ?? []));
-    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
-  };
-  useEffect(() => { load(); }, []);
-  const notify = async (s: any, subject: string, body: string) => {
-    const { data: enroll } = await supabase.from('mentis_enrollments').select('member_id,mentis_members(mentis_customers(email))').eq('session_id', s.id);
-    for (const e of enroll ?? []) {
-      const email = (e as any).members?.customers?.email;
-      if (email) await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ organizationId: staff?.organization_id, to: email, subject, body, template: 'cancellation', kind: 'alert' }) });
-    }
-  };
-  const cancel = async (s: any) => {
-    const reason = prompt('Cancellation reason (required):');
-    if (!reason?.trim()) return;
-    await supabase.from('mentis_sessions').update({ status: 'cancelled', cancel_reason: reason }).eq('id', s.id);
-    await notify(s, `Session cancelled: ${s.name}`, `${s.name} is cancelled (${reason}).`);
-    const { data: staffing } = await supabase.from('mentis_session_staffing').select('staff_id,planned_start,planned_end,rate_card_id,mentis_rate_cards(rate_cents)').eq('session_id', s.id);
-    for (const st of staffing ?? []) {
-      await supabase.from('mentis_staff_time_entries').insert({
-        organization_id: staff?.organization_id, staff_id: st.staff_id, session_id: s.id, kind: 'standby',
-        starts_at: st.planned_start, ends_at: st.planned_end, rate_cents: (st as any).rate_cards?.rate_cents ?? 0,
+// ---------------------------------------------------------------------------
+// Types for the workbook
+// ---------------------------------------------------------------------------
+type Venue = { id: string; name: string; concurrent_session_limit?: number };
+type SessionInstance = {
+  id: string;
+  name: string;
+  venue_id: string;
+  venue_name?: string;
+  start_at: string;
+  end_at: string;
+  status: string;
+  schedule_id?: string | null;
+};
+type Holiday = {
+  id: string;
+  name: string;
+  kind: 'term_holiday_week' | 'bank_holiday' | 'manual';
+  starts_on: string;
+  ends_on: string;
+};
+type Member = { id: string; name: string; alert?: boolean; customer?: string };
+type Enrollment = { session_id: string; member_id: string; member?: Member };
+type Attendance = { session_id: string; member_id: string; status: 'present' | 'absent' | 'late' | 'taster' };
+
+type SessionGroup = {
+  key: string; // schedule_id or name|venue
+  name: string;
+  venue_id: string;
+  venue_name: string;
+  schedule_id?: string | null;
+  dayLabel?: string;
+  timeLabel: string;
+  sessions: SessionInstance[]; // sorted by date
+  memberIds: string[]; // unique
+};
+
+// ---------------------------------------------------------------------------
+// Mock data generator for demo mode (no supabase)
+// ---------------------------------------------------------------------------
+function generateMock(): {
+  venues: Venue[];
+  holidays: Holiday[];
+  groups: SessionGroup[];
+  members: Member[];
+  attendance: Attendance[];
+  enrollments: Enrollment[];
+} {
+  const venues: Venue[] = [
+    { id: 'v1', name: 'Kingfisher Main Hall' },
+    { id: 'v2', name: 'Community Centre' },
+    { id: 'v3', name: 'St Marys School' },
+  ];
+  const holidays: Holiday[] = [
+    { id: 'h1', name: 'Half Term Break', kind: 'term_holiday_week', starts_on: '2025-10-27', ends_on: '2025-11-02' },
+    { id: 'h2', name: 'Christmas Break', kind: 'term_holiday_week', starts_on: '2025-12-20', ends_on: '2026-01-04' },
+    { id: 'h3', name: 'Bank Holiday - New Year', kind: 'bank_holiday', starts_on: '2026-01-01', ends_on: '2026-01-01' },
+    { id: 'h4', name: 'Easter Break', kind: 'term_holiday_week', starts_on: '2026-03-30', ends_on: '2026-04-12' },
+  ];
+
+  const memberNames = [
+    'Aarav Patel', 'Mia Chen', 'Oliver Smith', 'Zara Khan', 'Leo Johnson',
+    'Amara Okafor', 'Noah Williams', 'Sofia Garcia', 'Ethan Brown', 'Isla Taylor',
+    'Arjun Singh', 'Lily Evans', 'Mohammed Ali', 'Freya Wilson', 'Lucas Martin',
+    'Ava Thompson', 'Hassan Ahmed', 'Ruby Clark', 'Daniel Lee', 'Grace Lewis',
+  ];
+  const members: Member[] = memberNames.map((n, i) => ({
+    id: `m${i}`,
+    name: n,
+    alert: i % 7 === 0,
+    customer: ['Parent', 'Self', 'Guardian'][i % 3],
+  }));
+
+  const sessionDefs = [
+    { name: 'U11 Juniors', day: 1, time: '18:00-19:00', venue: 'v1' },
+    { name: 'U13 Development', day: 1, time: '19:00-20:30', venue: 'v1' },
+    { name: 'Advanced Squad', day: 2, time: '18:30-20:30', venue: 'v1' },
+    { name: 'Beginners', day: 3, time: '17:00-18:00', venue: 'v1' },
+    { name: 'Ladies Session', day: 4, time: '19:00-20:30', venue: 'v2' },
+    { name: 'U15 Competitive', day: 2, time: '18:00-20:00', venue: 'v2' },
+    { name: 'Saturday Club', day: 6, time: '09:00-12:00', venue: 'v1' },
+    { name: 'School Club Y5-6', day: 3, time: '15:30-16:30', venue: 'v3' },
+    { name: 'School Club Y7-8', day: 4, time: '15:30-16:30', venue: 'v3' },
+  ];
+
+  const groups: SessionGroup[] = sessionDefs.map((def, gi) => {
+    const venue = venues.find(v => v.id === def.venue)!;
+    const sessions: SessionInstance[] = [];
+    // Generate 14 weeks from Sep 2025
+    const start = new Date('2025-09-01T00:00:00Z');
+    for (let w = 0; w < 14; w++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + ((def.day - d.getDay() + 7) % 7) + w * 7);
+      const dateStr = d.toISOString().slice(0, 10);
+      // skip if in holiday? Keep but mark - we want to show red columns
+      const [sh, eh] = def.time.split('-');
+      sessions.push({
+        id: `s-${gi}-${w}`,
+        name: def.name,
+        venue_id: def.venue,
+        venue_name: venue.name,
+        start_at: `${dateStr}T${sh}:00Z`,
+        end_at: `${dateStr}T${eh}:00Z`,
+        status: w < 10 ? 'completed' : 'scheduled',
+        schedule_id: `sch-${gi}`,
       });
     }
-    load();
-  };
-  const postpone = async (s: any) => {
-    const v = prompt('New start (YYYY-MM-DDTHH:MM):', s.start_at.slice(0, 16));
-    if (!v) return;
-    const dur = Date.parse(s.end_at) - Date.parse(s.start_at);
-    const start = new Date(v).toISOString();
-    const end = new Date(Date.parse(start) + dur).toISOString();
-    const { data: hol } = await supabase.from('mentis_holiday_calendar').select('id')
-      .lte('starts_on', end.slice(0, 10)).gte('ends_on', start.slice(0, 10));
-    if (hol?.length) { alert('New slot falls on a holiday / no-session day (rule 16).'); return; }
-    const { error } = await supabase.from('mentis_sessions').update({ start_at: start, end_at: end, status: 'scheduled' }).eq('id', s.id);
-    if (error) { alert(`Blocked: ${error.message}`); return; } // rules 17–18 enforced at save
-    const delta = Date.parse(start) - Date.parse(s.start_at);
-    const { data: st } = await supabase.from('mentis_session_staffing').select('id,planned_start,planned_end').eq('session_id', s.id);
-    for (const x of st ?? []) {
-      await supabase.from('mentis_session_staffing').update({
-        planned_start: new Date(Date.parse(x.planned_start) + delta).toISOString(),
-        planned_end: new Date(Date.parse(x.planned_end) + delta).toISOString(),
-      }).eq('id', x.id);
-    }
-    await notify(s, `Session rescheduled: ${s.name}`, `${s.name} moves to ${new Date(start).toLocaleString()}.`);
-    load();
-  };
-  const create = async () => {
-    if (!form.name.trim() || !form.venue_id || !form.start_at || !form.end_at) { alert('Name, venue, start, end required.'); return; }
-    const { error } = await supabase.from('mentis_sessions').insert({
-      organization_id: staff?.organization_id, venue_id: form.venue_id, name: form.name,
-      start_at: new Date(form.start_at).toISOString(), end_at: new Date(form.end_at).toISOString(), status: 'scheduled',
+    const memberIds = members.slice((gi * 3) % members.length, (gi * 3) % members.length + 8 + (gi % 4)).map(m => m.id);
+    return {
+      key: `sch-${gi}`,
+      name: def.name,
+      venue_id: def.venue,
+      venue_name: venue.name,
+      schedule_id: `sch-${gi}`,
+      dayLabel: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][def.day],
+      timeLabel: def.time,
+      sessions,
+      memberIds,
+    };
+  });
+
+  const enrollments: Enrollment[] = groups.flatMap(g =>
+    g.memberIds.map(mid => ({ session_id: g.sessions[0].id, member_id: mid, member: members.find(m => m.id === mid) }))
+  );
+
+  const attendance: Attendance[] = [];
+  groups.forEach(g => {
+    g.sessions.forEach(sess => {
+      const date = sess.start_at.slice(0, 10);
+      const isHoliday = holidays.some(h => date >= h.starts_on && date <= h.ends_on);
+      if (isHoliday) return;
+      g.memberIds.forEach(mid => {
+        const r = Math.random();
+        let status: Attendance['status'] = 'present';
+        if (r < 0.08) status = 'absent';
+        else if (r < 0.12) status = 'late';
+        attendance.push({ session_id: sess.id, member_id: mid, status });
+      });
     });
-    if (error) alert(`Blocked: ${error.message}`);
-    else { setForm({ ...form, name: '' }); load(); }
+  });
+
+  return { venues, holidays, groups, members, attendance, enrollments };
+}
+
+function isDateInHolidays(dateStr: string, holidays: Holiday[]): Holiday | null {
+  for (const h of holidays) {
+    if (dateStr >= h.starts_on && dateStr <= h.ends_on) return h;
+  }
+  return null;
+}
+
+function formatDateShort(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+}
+function formatDay(iso: string) {
+  return new Date(iso).toLocaleDateString('en-GB', { weekday: 'short' });
+}
+
+// ---------------------------------------------------------------------------
+// Sessions Workbook - Main Component
+// ---------------------------------------------------------------------------
+export function Sessions() {
+  const { staff, canDo } = useAuth();
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [groups, setGroups] = useState<SessionGroup[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [selectedVenue, setSelectedVenue] = useState<string>('all');
+  const [selectedGroupKey, setSelectedGroupKey] = useState<string>('');
+  const [search, setSearch] = useState('');
+  const [showOnlyAlert, setShowOnlyAlert] = useState(false);
+  const [attendanceFilter, setAttendanceFilter] = useState<'all' | 'present' | 'absent' | 'late'>('all');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load data
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      setLoading(true);
+      if (demoEnabled || !staff) {
+        // use mock
+        const mock = generateMock();
+        if (!alive) return;
+        setVenues(mock.venues);
+        setHolidays(mock.holidays);
+        setGroups(mock.groups);
+        setMembers(mock.members);
+        setAttendance(mock.attendance);
+        setSelectedGroupKey(mock.groups[0]?.key ?? '');
+        setLoading(false);
+        return;
+      }
+      try {
+        const [{ data: vData }, { data: hData }, { data: sData }, { data: eData }, { data: aData }, { data: mData }] = await Promise.all([
+          supabase.from('mentis_venues').select('id,name'),
+          supabase.from('mentis_holiday_calendar').select('*').order('starts_on'),
+          supabase.from('mentis_sessions').select('id,name,venue_id,start_at,end_at,status,schedule_id,mentis_venues(name)').order('start_at').limit(300),
+          supabase.from('mentis_enrollments').select('session_id,member_id,mentis_members(id,name)').limit(1000),
+          supabase.from('mentis_attendance_records').select('session_id,member_id,status').limit(2000),
+          supabase.from('mentis_members').select('id,name').order('name').limit(500),
+        ]);
+        if (!alive) return;
+        const v = (vData ?? []) as Venue[];
+        setVenues(v);
+        setHolidays((hData ?? []) as Holiday[]);
+
+        // Build groups from sessions: group by schedule_id or name+venue
+        const sess = (sData ?? []) as any[];
+        const groupMap = new Map<string, SessionGroup>();
+        sess.forEach((s: any) => {
+          const key = s.schedule_id ?? `${s.name}|${s.venue_id}`;
+          if (!groupMap.has(key)) {
+            groupMap.set(key, {
+              key,
+              name: s.name,
+              venue_id: s.venue_id,
+              venue_name: s.mentis_venues?.name ?? v.find(x => x.id === s.venue_id)?.name ?? 'Venue',
+              schedule_id: s.schedule_id,
+              dayLabel: formatDay(s.start_at),
+              timeLabel: `${new Date(s.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${new Date(s.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+              sessions: [],
+              memberIds: [],
+            });
+          }
+          groupMap.get(key)!.sessions.push({
+            id: s.id,
+            name: s.name,
+            venue_id: s.venue_id,
+            venue_name: s.mentis_venues?.name,
+            start_at: s.start_at,
+            end_at: s.end_at,
+            status: s.status,
+            schedule_id: s.schedule_id,
+          });
+        });
+        // Attach memberIds from enrollments
+        const enrollMap = new Map<string, Set<string>>();
+        (eData ?? []).forEach((e: any) => {
+          const sessId = e.session_id;
+          // find group containing this session
+          for (const g of groupMap.values()) {
+            if (g.sessions.some(ss => ss.id === sessId)) {
+              if (!enrollMap.has(g.key)) enrollMap.set(g.key, new Set());
+              enrollMap.get(g.key)!.add(e.member_id);
+            }
+          }
+        });
+        enrollMap.forEach((set, key) => {
+          const g = groupMap.get(key);
+          if (g) g.memberIds = Array.from(set);
+        });
+
+        const allGroups = Array.from(groupMap.values()).map(g => ({
+          ...g,
+          sessions: g.sessions.sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)),
+        }));
+
+        setGroups(allGroups);
+        setMembers((mData ?? []).map((m: any) => ({ id: m.id, name: m.name })) as Member[]);
+        setAttendance((aData ?? []) as Attendance[]);
+        if (allGroups.length) setSelectedGroupKey(allGroups[0].key);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+    return () => { alive = false; };
+  }, [staff]);
+
+  // Derived
+  const filteredGroups = useMemo(() => {
+    if (selectedVenue === 'all') return groups;
+    return groups.filter(g => g.venue_id === selectedVenue);
+  }, [groups, selectedVenue]);
+
+  const selectedGroup = useMemo(() => {
+    return groups.find(g => g.key === selectedGroupKey) ?? filteredGroups[0] ?? null;
+  }, [groups, selectedGroupKey, filteredGroups]);
+
+  // Keep selected group valid when venue changes
+  useEffect(() => {
+    if (!filteredGroups.length) return;
+    if (!filteredGroups.some(g => g.key === selectedGroupKey)) {
+      setSelectedGroupKey(filteredGroups[0].key);
+    }
+  }, [filteredGroups, selectedGroupKey]);
+
+  const groupMembers = useMemo(() => {
+    if (!selectedGroup) return [] as Member[];
+    const ids = new Set(selectedGroup.memberIds);
+    let list = members.filter(m => ids.has(m.id));
+    if (demoEnabled) {
+      // for demo, members are already filtered via groupMemberIds but also ensure order
+      list = members.filter(m => selectedGroup.memberIds.includes(m.id));
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(m => m.name.toLowerCase().includes(q));
+    }
+    if (showOnlyAlert) list = list.filter(m => m.alert);
+    return list;
+  }, [selectedGroup, members, search, showOnlyAlert]);
+
+  const attendanceMap = useMemo(() => {
+    const map = new Map<string, Attendance['status']>();
+    attendance.forEach(a => map.set(`${a.member_id}|${a.session_id}`, a.status));
+    return map;
+  }, [attendance]);
+
+  const stats = useMemo(() => {
+    if (!selectedGroup) return { total: 0, presentAvg: 0, members: 0 };
+    const totalSessions = selectedGroup.sessions.filter(s => !isDateInHolidays(s.start_at.slice(0, 10), holidays)).length;
+    let present = 0;
+    let totalMarks = 0;
+    attendance.forEach(a => {
+      if (selectedGroup.sessions.some(s => s.id === a.session_id)) {
+        totalMarks++;
+        if (a.status === 'present') present++;
+      }
+    });
+    return {
+      total: totalSessions,
+      presentAvg: totalMarks ? Math.round((present / totalMarks) * 100) : 0,
+      members: selectedGroup.memberIds.length,
+    };
+  }, [selectedGroup, attendance, holidays]);
+
+  const cycleAttendance = (memberId: string, sessionId: string) => {
+    const key = `${memberId}|${sessionId}`;
+    const current = attendanceMap.get(key) ?? 'absent';
+    const next: Attendance['status'] = current === 'absent' ? 'present' : current === 'present' ? 'late' : current === 'late' ? 'absent' : 'present';
+    setAttendance(prev => {
+      const exists = prev.find(a => a.member_id === memberId && a.session_id === sessionId);
+      if (exists) return prev.map(a => a.member_id === memberId && a.session_id === sessionId ? { ...a, status: next } : a);
+      return [...prev, { member_id: memberId, session_id: sessionId, status: next }];
+    });
+    // optionally sync to supabase
+    if (!demoEnabled && staff) {
+      supabase.from('mentis_attendance_records').upsert({
+        session_id: sessionId,
+        member_id: memberId,
+        status: next,
+        recorded_by: staff.user_id,
+      }).then();
+    }
   };
+
+  const exportCsv = () => {
+    if (!selectedGroup) return;
+    const headers = ['Member', ...selectedGroup.sessions.map(s => `${s.start_at.slice(0, 10)}`)];
+    const rows = groupMembers.map(m => {
+      const cells = selectedGroup.sessions.map(s => {
+        const hol = isDateInHolidays(s.start_at.slice(0, 10), holidays);
+        if (hol) return `HOLIDAY:${hol.name}`;
+        return attendanceMap.get(`${m.id}|${s.id}`) ?? 'absent';
+      });
+      return [m.name, ...cells].join(',');
+    });
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedGroup.name.replace(/\s+/g, '_')}_attendance.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Scroll helpers for session tabs
+  const scrollTabs = (dir: 'left' | 'right') => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollBy({ left: dir === 'left' ? -240 : 240, behavior: 'smooth' });
+  };
+
   return (
-    <div>
-      <PageTitle title="Sessions" sub="Lifecycle: scheduled → completed · cancel / postpone (re-validated, rule 22)" />
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Sessions Workbook"
+        eyebrow="Spreadsheet mode"
+        subtitle="Venue → Session tabs → Members × Dates register. Holidays & term breaks in red. Click any cell to cycle attendance."
+        breadcrumbs={[{ label: 'Coaching' }]}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button intent="secondary" size="sm" iconLeft={<Download className="size-4" />} onClick={exportCsv} disabled={!selectedGroup}>
+              Export CSV
+            </Button>
+            <Link to="/scheduling" className="btn btn-ghost btn-sm">
+              <Timer className="size-4" />
+              Scheduling
+            </Link>
+          </div>
+        }
+      />
+
+      {/* Venue Workbook Tabs - Top level grouping */}
+      <div className="card p-2">
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <FileSpreadsheet className="size-4 text-brand" />
+          <span className="overline">Venues — workbook</span>
+          <span className="text-[10px] text-ink-faint ml-2">Grouped like Excel workbook tabs</span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setSelectedVenue('all')}
+            className={cn(
+              'group relative flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all',
+              selectedVenue === 'all'
+                ? 'bg-surface-raised border-brand text-brand-text shadow-sm'
+                : 'bg-surface-inset border-line text-ink-muted hover:border-[var(--border-strong)] hover:text-ink'
+            )}
+          >
+            <BookOpen className="size-3.5" />
+            All Venues
+            <span className="ml-1 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10px] tabular-nums">{groups.length}</span>
+          </button>
+          {venues.map(v => {
+            const count = groups.filter(g => g.venue_id === v.id).length;
+            const active = selectedVenue === v.id;
+            return (
+              <button
+                key={v.id}
+                onClick={() => setSelectedVenue(v.id)}
+                className={cn(
+                  'group relative flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all',
+                  active
+                    ? 'bg-surface-raised border-brand text-brand-text shadow-sm'
+                    : 'bg-surface-inset border-line text-ink-muted hover:border-[var(--border-strong)] hover:text-ink'
+                )}
+              >
+                <MapPin className="size-3.5" />
+                {v.name}
+                <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] tabular-nums', active ? 'bg-brand-soft' : 'bg-surface-hover')}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Session Sheet Tabs - Second level, spreadsheet-like */}
+      <div className="card p-0 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-line bg-surface-inset/50 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-ink-faint">
+              <CalendarDays className="size-4" />
+              <span className="text-xs font-semibold tracking-wide uppercase">Sessions — sheet tabs</span>
+            </div>
+            <Badge tone="neutral" size="sm">{filteredGroups.length} sheets</Badge>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => scrollTabs('left')} className="grid size-7 place-items-center rounded-sm border border-line bg-surface text-ink-faint hover:text-ink">
+              <ChevronLeft className="size-4" />
+            </button>
+            <button onClick={() => scrollTabs('right')} className="grid size-7 place-items-center rounded-sm border border-line bg-surface text-ink-faint hover:text-ink">
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable tab bar that mimics Excel sheet tabs */}
+        <div ref={scrollRef} className="flex items-end gap-0 overflow-x-auto no-scrollbar border-b border-line bg-surface-inset px-2">
+          {loading ? (
+            <div className="flex gap-1 p-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-8 w-36 animate-pulse rounded-t-md bg-surface-hover" />
+              ))}
+            </div>
+          ) : filteredGroups.length === 0 ? (
+            <div className="p-3 text-xs text-ink-faint">No sessions for this venue.</div>
+          ) : (
+            filteredGroups.map(g => {
+              const active = selectedGroup?.key === g.key;
+              const holidayCount = g.sessions.filter(s => isDateInHolidays(s.start_at.slice(0, 10), holidays)).length;
+              return (
+                <button
+                  key={g.key}
+                  onClick={() => setSelectedGroupKey(g.key)}
+                  className={cn(
+                    'relative flex shrink-0 items-center gap-2 border-x border-t px-3.5 py-2 text-xs font-semibold transition-all',
+                    'first:rounded-tl-md last:rounded-tr-md -mb-px',
+                    active
+                      ? 'z-10 bg-surface border-line border-b-surface text-ink shadow-[0_-2px_0_var(--brand)]'
+                      : 'bg-surface-inset/70 border-transparent text-ink-muted hover:bg-surface-hover hover:text-ink'
+                  )}
+                  style={active ? { borderBottomColor: 'var(--surface)' } : undefined}
+                >
+                  <span className="max-w-[14ch] truncate">{g.name}</span>
+                  <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-medium text-ink-faint">
+                    <Clock className="size-3" />
+                    {g.dayLabel} {g.timeLabel}
+                  </span>
+                  {holidayCount > 0 && (
+                    <span className="rounded-full bg-danger-soft px-1 py-0.5 text-[9px] font-bold text-danger">{holidayCount} HOL</span>
+                  )}
+                  <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] tabular-nums">{g.memberIds.length}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {/* Selected group meta */}
+        {selectedGroup && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div className="grid size-8 place-items-center rounded-md bg-brand-soft text-brand">
+                  <Users className="size-4" />
+                </div>
+                <div className="leading-tight">
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    {selectedGroup.name}
+                    <span className="text-xs font-medium text-ink-muted">· {selectedGroup.venue_name}</span>
+                  </div>
+                  <div className="text-[11px] text-ink-faint">
+                    {selectedGroup.dayLabel} {selectedGroup.timeLabel} · {stats.total} dates · {stats.members} members · {stats.presentAvg}% avg attendance
+                  </div>
+                </div>
+              </div>
+              <div className="hidden md:flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full bg-success-soft px-2 py-0.5 text-[11px] font-semibold text-success">
+                  <Check className="size-3" /> {stats.presentAvg}% present
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-surface-inset px-2 py-0.5 text-[11px] text-ink-muted">
+                  <CalendarDays className="size-3" /> {selectedGroup.sessions.length} sessions
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <InputWithIcon
+                icon={<Search className="size-4" />}
+                placeholder="Search members…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onClear={() => setSearch('')}
+                className="w-44"
+              />
+              <div className="flex items-center gap-1 rounded-md border border-line bg-surface-inset p-0.5">
+                <button
+                  onClick={() => setShowOnlyAlert(!showOnlyAlert)}
+                  className={cn('rounded-[5px] px-2 py-1 text-[11px] font-semibold', showOnlyAlert ? 'bg-amber-500/15 text-amber-600' : 'text-ink-faint hover:text-ink')}
+                  title="Only show ⚠️"
+                >
+                  ⚠️
+                </button>
+                <button
+                  onClick={() => setAttendanceFilter(f => f === 'all' ? 'absent' : 'all')}
+                  className={cn('rounded-[5px] px-2 py-1 text-[11px] font-semibold', attendanceFilter !== 'all' ? 'bg-surface-raised shadow-sm text-ink' : 'text-ink-faint hover:text-ink')}
+                >
+                  <Filter className="size-3 inline mr-1" />
+                  {attendanceFilter === 'all' ? 'All' : 'Absent only'}
+                </button>
+              </div>
+              {canDo('sessions.manage') && (
+                <Button size="sm" intent="soft" iconLeft={<Plus className="size-4" />}>
+                  Add member
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Attendance Register Grid - The spreadsheet */}
+      <div className="card overflow-hidden p-0">
+        {!selectedGroup ? (
+          <div className="p-12 text-center">
+            <FileSpreadsheet className="mx-auto size-10 text-ink-faint mb-3" />
+            <p className="text-sm text-ink-muted">Select a session sheet tab above to view attendance register.</p>
+          </div>
+        ) : (
+          <>
+            {/* Legend */}
+            <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface-inset/40 px-3 py-2 text-[11px]">
+              <span className="font-semibold text-ink-faint uppercase tracking-wide">Legend:</span>
+              <span className="inline-flex items-center gap-1.5"><span className="grid size-5 place-items-center rounded-sm bg-success-soft text-success"><Check className="size-3" /></span> Present</span>
+              <span className="inline-flex items-center gap-1.5"><span className="grid size-5 place-items-center rounded-sm bg-surface-hover text-ink-faint"><X className="size-3" /></span> Absent</span>
+              <span className="inline-flex items-center gap-1.5"><span className="grid size-5 place-items-center rounded-sm bg-warning-soft text-warning"><Clock className="size-3" /></span> Late</span>
+              <span className="inline-flex items-center gap-1.5"><span className="grid size-5 place-items-center rounded-sm bg-danger-soft text-danger border border-danger/20"><Ban className="size-3" /></span> Holiday / Term Break (red)</span>
+              <span className="ml-auto hidden md:inline-flex items-center gap-1 text-ink-faint">
+                <Sparkles className="size-3" /> Click any cell to cycle · Term breaks marked in red per your spreadsheet
+              </span>
+            </div>
+
+            {/* The Grid */}
+            <div className="relative overflow-auto" style={{ maxHeight: '62vh' }}>
+              <table className="w-full border-collapse text-xs" style={{ minWidth: 900 }}>
+                <thead className="sticky top-0 z-20 bg-surface">
+                  <tr>
+                    <th className="sticky left-0 z-30 w-[200px] border-b border-r border-line bg-surface p-2 text-left">
+                      <div className="flex items-center gap-2">
+                        <Users className="size-3.5 text-ink-faint" />
+                        <span className="text-[11px] font-bold uppercase tracking-wide">Members</span>
+                        <span className="ml-auto rounded-full bg-surface-inset px-1.5 py-0.5 text-[10px] tabular-nums">{groupMembers.length}</span>
+                      </div>
+                    </th>
+                    {selectedGroup.sessions.map(sess => {
+                      const dateStr = sess.start_at.slice(0, 10);
+                      const hol = isDateInHolidays(dateStr, holidays);
+                      const isWeekend = new Date(sess.start_at).getDay() === 0 || new Date(sess.start_at).getDay() === 6;
+                      return (
+                        <th
+                          key={sess.id}
+                          className={cn(
+                            'min-w-[72px] border-b border-r border-line p-1 text-center align-bottom',
+                            hol
+                              ? 'bg-danger text-white'
+                              : isWeekend
+                              ? 'bg-surface-inset'
+                              : 'bg-surface',
+                            hol && 'relative overflow-hidden'
+                          )}
+                          title={hol ? `${hol.name} (${hol.kind}) — No session` : `${dateStr} ${new Date(sess.start_at).toLocaleTimeString()}`}
+                        >
+                          {hol && (
+                            <>
+                              <div className="pointer-events-none absolute inset-0 opacity-20" style={{
+                                backgroundImage: `repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.5) 4px, rgba(255,255,255,0.5) 8px)`
+                              }} />
+                              <div className="relative">
+                                <div className="text-[9px] font-bold uppercase leading-none">HOL</div>
+                                <div className="text-[10px] font-bold leading-tight truncate max-w-[64px]">{hol.name.slice(0, 12)}</div>
+                                <div className="text-[9px] opacity-90">{formatDateShort(sess.start_at)}</div>
+                              </div>
+                            </>
+                          )}
+                          {!hol && (
+                            <div className="flex flex-col items-center gap-0.5 py-1">
+                              <span className={cn('text-[10px] font-medium', isWeekend ? 'text-ink-faint' : 'text-ink-muted')}>{formatDay(sess.start_at)}</span>
+                              <span className="text-[11px] font-bold tabular-nums">{formatDateShort(sess.start_at)}</span>
+                              <span className="text-[9px] text-ink-faint tabular-nums">{new Date(sess.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              {/* present count */}
+                              <span className="mt-1 rounded-full bg-surface-inset px-1 py-0 text-[9px] tabular-nums">
+                                {attendance.filter(a => a.session_id === sess.id && a.status === 'present').length}/{selectedGroup.memberIds.length}
+                              </span>
+                            </div>
+                          )}
+                        </th>
+                      );
+                    })}
+                    <th className="sticky right-0 z-20 w-[68px] border-b border-l border-line bg-surface p-1 text-center text-[10px] font-bold uppercase">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupMembers.map((m, idx) => {
+                    const memberAttendances = selectedGroup.sessions.map(s => attendanceMap.get(`${m.id}|${s.id}`) ?? 'absent');
+                    const presentCount = memberAttendances.filter(s => s === 'present').length;
+                    const totalValid = selectedGroup.sessions.filter(s => !isDateInHolidays(s.start_at.slice(0, 10), holidays)).length;
+                    const pctVal = totalValid ? Math.round((presentCount / totalValid) * 100) : 0;
+                    const filteredOutByAttendance = attendanceFilter === 'absent' && !memberAttendances.includes('absent');
+                    if (filteredOutByAttendance) return null;
+                    return (
+                      <tr key={m.id} className={cn('group/row', idx % 2 === 0 ? 'bg-surface' : 'bg-surface-hover/30')}>
+                        <td className="sticky left-0 z-10 border-b border-r border-line bg-inherit p-2">
+                          <div className="flex items-center gap-2">
+                            <div className="grid size-6 place-items-center rounded-full bg-brand-soft text-[10px] font-bold text-brand-text">
+                              {m.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                            </div>
+                            <div className="min-w-0 leading-tight">
+                              <div className="flex items-center gap-1 truncate text-xs font-semibold">
+                                <span className="truncate">{m.name}</span>
+                                {m.alert && <span className="text-[11px]" title="Medical alert">⚠️</span>}
+                              </div>
+                              <div className="text-[10px] text-ink-faint truncate">{m.customer ?? 'Member'}</div>
+                            </div>
+                            <Link to={`/members/${m.id}`} className="ml-auto hidden group-hover/row:grid size-5 place-items-center rounded-sm bg-surface-inset text-ink-faint hover:text-ink">
+                              <MoreHorizontal className="size-3" />
+                            </Link>
+                          </div>
+                        </td>
+                        {selectedGroup.sessions.map(sess => {
+                          const dateStr = sess.start_at.slice(0, 10);
+                          const hol = isDateInHolidays(dateStr, holidays);
+                          const status = attendanceMap.get(`${m.id}|${sess.id}`) ?? 'absent';
+                          if (hol) {
+                            return (
+                              <td key={sess.id} className="border-b border-r border-line bg-danger-soft/60 p-0 text-center">
+                                <div className="grid h-9 place-items-center text-[10px] font-bold text-danger/60">
+                                  <Ban className="size-3" />
+                                </div>
+                              </td>
+                            );
+                          }
+                          return (
+                            <td key={sess.id} className="border-b border-r border-line p-0">
+                              <button
+                                onClick={() => cycleAttendance(m.id, sess.id)}
+                                className={cn(
+                                  'grid h-9 w-full place-items-center transition-all hover:scale-105 hover:z-10 hover:shadow-sm',
+                                  status === 'present' && 'bg-success-soft text-success hover:bg-success/20',
+                                  status === 'absent' && 'bg-transparent text-ink-faint hover:bg-surface-hover',
+                                  status === 'late' && 'bg-warning-soft text-warning hover:bg-warning/20',
+                                  status === 'taster' && 'bg-info-soft text-info'
+                                )}
+                                title={`${m.name} — ${dateStr}: ${status} (click to cycle)`}
+                              >
+                                {status === 'present' && <Check className="size-4" />}
+                                {status === 'absent' && <X className="size-3 opacity-40" />}
+                                {status === 'late' && <Clock className="size-3.5" />}
+                                {status === 'taster' && <span className="text-[10px] font-bold">T</span>}
+                              </button>
+                            </td>
+                          );
+                        })}
+                        <td className="sticky right-0 z-10 border-b border-l border-line bg-inherit p-1 text-center">
+                          <div className={cn(
+                            'mx-auto grid size-7 place-items-center rounded-full text-[10px] font-bold tabular-nums',
+                            pctVal >= 80 ? 'bg-success-soft text-success' : pctVal >= 50 ? 'bg-warning-soft text-warning' : 'bg-danger-soft text-danger'
+                          )}>
+                            {pctVal}%
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="sticky bottom-0 z-20 bg-surface-inset">
+                  <tr>
+                    <td className="sticky left-0 border-t border-r border-line bg-surface-inset p-2 text-[11px] font-bold">
+                      <div className="flex items-center gap-1">
+                        <CheckCheck className="size-3.5" />
+                        Totals
+                      </div>
+                    </td>
+                    {selectedGroup.sessions.map(sess => {
+                      const dateStr = sess.start_at.slice(0, 10);
+                      const hol = isDateInHolidays(dateStr, holidays);
+                      if (hol) {
+                        return <td key={sess.id} className="border-t border-r border-line bg-danger-soft/50" />;
+                      }
+                      const present = attendance.filter(a => a.session_id === sess.id && a.status === 'present').length;
+                      return (
+                        <td key={sess.id} className="border-t border-r border-line p-1 text-center text-[11px] font-bold tabular-nums">
+                          {present}
+                        </td>
+                      );
+                    })}
+                    <td className="sticky right-0 border-t border-l border-line bg-surface-inset p-1 text-center text-[11px] font-bold">
+                      {stats.presentAvg}%
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* Footer toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-surface px-3 py-2 text-[11px] text-ink-faint">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-success" /> Present</span>
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-warning" /> Late</span>
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-ink-faint" /> Absent</span>
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-danger" /> Holiday / Term Break</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>{groupMembers.length} members × {selectedGroup.sessions.length} dates</span>
+                <span className="hidden sm:inline">· Scroll horizontally for more dates</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Quick create / manage bar - preserves original functionality */}
       {canDo('sessions.manage') && (
-        <div className="card p-4 mb-4 flex flex-wrap gap-2 items-end">
-          <input className="input" style={{ width: 200 }} placeholder="Session name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <select className="input" style={{ width: 170 }} value={form.venue_id} onChange={(e) => setForm({ ...form, venue_id: e.target.value })}>
-            <option value="">Venue…</option>{venues.map((v: any) => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-          <label className="text-sm">Start <input type="datetime-local" className="input" value={form.start_at} onChange={(e) => setForm({ ...form, start_at: e.target.value })} /></label>
-          <label className="text-sm">End <input type="datetime-local" className="input" value={form.end_at} onChange={(e) => setForm({ ...form, end_at: e.target.value })} /></label>
-          <button className="btn btn-primary" onClick={create}>Create session</button>
+        <div className="card p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-xs font-bold uppercase tracking-wide flex items-center gap-1.5 mr-2">
+              <Plus className="size-4" /> Quick session actions
+            </h4>
+            <Link to="/scheduling" className="btn btn-ghost btn-sm">
+              <Timer className="size-4" /> Generate from weekly pattern
+            </Link>
+            <Link to="/holidays" className="btn btn-ghost btn-sm">
+              <AlertTriangle className="size-4" /> Manage holidays (red columns)
+            </Link>
+            <Link to="/overrides" className="btn btn-ghost btn-sm">
+              Overrides
+            </Link>
+            <span className="ml-auto text-[11px] text-ink-faint">Term breaks & holidays are automatically marked red — they block session generation (Rule 16)</span>
+          </div>
         </div>
       )}
-      <div className="card p-2"><table className="grid">
-        <thead><tr><th>Session</th><th>When</th><th>Venue</th><th>Status</th><th></th></tr></thead>
-        <tbody>{rows.map((s) => (
-          <tr key={s.id}><td><Link to={`/register/${s.id}`} className="font-semibold">{s.name}</Link></td>
-            <td>{new Date(s.start_at).toLocaleString()}</td><td>{s.venues?.name}</td>
-            <td><span className="badge" style={{ background: 'var(--surface-inset)' }}>{s.status}</span></td>
-            <td className="flex gap-2">{canDo('sessions.manage') && s.status === 'scheduled' && (
-              <span className="flex gap-2">
-                <button className="btn btn-ghost" onClick={() => postpone(s)}>Postpone</button>
-                <button className="btn btn-ghost" onClick={() => cancel(s)}>Cancel</button>
-              </span>)}</td></tr>
-        ))}</tbody>
-      </table></div>
+
+      {/* Empty / loading */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="card p-6">
+            <div className="grid gap-3">
+              <div className="h-6 w-40 animate-pulse rounded-md bg-surface-hover" />
+              <div className="h-32 animate-pulse rounded-md bg-surface-hover" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-/* ---------- Scheduling: weekly generator, holidays, overrides ---------- */
+// ---------------------------------------------------------------------------
+// Scheduling, Tasks, Inbox - keep existing but polished (from previous file)
+// ---------------------------------------------------------------------------
 export function Scheduling() {
   const { staff, canDo } = useAuth();
   const [schedules, setSchedules] = useState<any[]>([]);
@@ -138,7 +879,7 @@ export function Scheduling() {
   if (!canDo('sessions.manage')) return <div className="p-8">Admin only.</div>;
   return (
     <div>
-      <PageTitle title="Scheduling" sub="Weekly patterns → instances · holidays · overrides" right={<Link to="/overrides" className="btn btn-ghost">Overrides</Link>} />
+      <PageHeader title="Scheduling" subtitle="Weekly patterns → instances · holidays · overrides" actions={<Link to="/overrides" className="btn btn-ghost">Overrides</Link>} />
       <div className="card p-4 mb-4 flex flex-col gap-2" style={{ maxWidth: 700 }}>
         <h3 className="font-bold">New weekly schedule</h3>
         <div className="grid grid-cols-2 gap-2">
@@ -156,17 +897,16 @@ export function Scheduling() {
       </div>
       <div className="grid md:grid-cols-2 gap-4">
         <div className="card p-4"><h3 className="font-bold mb-2">Patterns</h3>
-          {schedules.map((s: any) => <div key={s.id} className="flex justify-between py-1 text-sm"><span>{s.name} · {s.venues?.name} · {s.valid_from}→{s.valid_to}</span><button className="btn btn-ghost" onClick={() => generate(s)}>Generate</button></div>)}
+          {schedules.map((s: any) => <div key={s.id} className="flex justify-between py-1 text-sm"><span>{s.name} · {s.mentis_venues?.name} · {s.valid_from}→{s.valid_to}</span><button className="btn btn-ghost" onClick={() => generate(s)}>Generate</button></div>)}
         </div>
-        <div className="card p-4"><h3 className="font-bold mb-2">Holiday calendar</h3>
-          {holidays.map((h: any) => <div key={h.id} className="text-sm py-1">• {h.name} <em>({h.kind})</em> {h.starts_on}→{h.ends_on}</div>)}
+        <div className="card p-4"><h3 className="font-bold mb-2">Holiday calendar — red columns in workbook</h3>
+          {holidays.map((h: any) => <div key={h.id} className="text-sm py-1 flex items-center gap-2"><span className="size-2 rounded-full bg-danger inline-block" /> {h.name} <em>({h.kind})</em> {h.starts_on}→{h.ends_on}</div>)}
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------- Tasks: typed, work log, reminders, recurring, chargeable ---------- */
 export function Tasks() {
   const { staff, canDo } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
@@ -216,7 +956,7 @@ export function Tasks() {
   };
   return (
     <div>
-      <PageTitle title="Tasks" sub="Billable only after manager/admin TASK approval (separate from invoice approval)" />
+      <PageHeader title="Tasks" subtitle="Billable only after manager/admin TASK approval (separate from invoice approval)" />
       <div className="card p-4 mb-4 flex flex-wrap gap-2 items-end">
         <input className="input" style={{ width: 220 }} placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
         <select className="input" style={{ width: 150 }} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
@@ -259,7 +999,6 @@ export function Tasks() {
   );
 }
 
-/* ---------- Admin inbox: pending actions ---------- */
 export function Inbox() {
   const [rows, setRows] = useState<any[]>([]);
   const [filter, setFilter] = useState('open');
@@ -272,7 +1011,7 @@ export function Inbox() {
   const visible = rows.filter((r: any) => filter === 'all' || r.status === filter);
   return (
     <div>
-      <PageTitle title="Inbox" sub="Pending actions queue" right={
+      <PageHeader title="Inbox" subtitle="Pending actions queue" actions={
         <span className="flex gap-2">
           <Link to="/actions/new" className="btn btn-primary">New manual action</Link>
           <select className="input" style={{ width: 'auto' }} value={filter} onChange={(e) => setFilter(e.target.value)}>
@@ -283,7 +1022,7 @@ export function Inbox() {
       <div className="card p-2"><table className="grid">
         <thead><tr><th>Action</th><th>Type</th><th>Due</th><th>Status</th><th></th></tr></thead>
         <tbody>{visible.map((a: any) => (
-          <tr key={a.id}><td className="font-semibold">{a.title}</td><td>{a.action_types?.name}</td>
+          <tr key={a.id}><td className="font-semibold">{a.title}</td><td>{a.mentis_action_types?.name}</td>
             <td>{new Date(a.due_at).toLocaleDateString()}</td>
             <td><span className="badge" style={{ background: a.status === 'breached' ? 'var(--danger)' : 'var(--border)', color: a.status === 'breached' ? '#fff' : undefined }}>{a.status}</span></td>
             <td>{a.status !== 'closed' && <button className="btn btn-primary" onClick={() => close(a)}>Close</button>}</td></tr>
