@@ -1,6 +1,6 @@
 -- Mentis foundation: scheduling, staffing and auditable billing
 create type session_status as enum ('scheduled','cancelled','postponed','completed');
-create type holiday_kind as enum ('term_holiday_week','bank_holiday','manual');
+create type holiday_kind as enum ('term_break','bank_holiday','manual');
 create type time_entry_kind as enum ('planned','actual','standby');
 create type invoice_status as enum ('draft','pendingApproval','approved','paid');
 create type action_status as enum ('open','breached','closed');

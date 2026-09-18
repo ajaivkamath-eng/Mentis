@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { PageTitle } from '../lib/ui';
+import { ReviewAndConfirmBanner, ConfirmDialog } from '../components/ui/dialog';
 
 /* ---------- Venues ---------- */
 export function Venues() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [form, setForm] = useState({ name: '', address: '', phone: '', capacity: '', concurrent_session_limit: 1, notes: '' });
+  const [showDeleteVenue, setShowDeleteVenue] = useState<string | null>(null);
   const load = () => supabase.from('mentis_venues').select('*').order('name').then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const save = async () => {
@@ -20,9 +22,9 @@ export function Venues() {
     setForm({ ...form, name: '' }); load();
   };
   const remove = async (id: string) => {
-    if (!confirm('Delete venue? Sessions must be moved first.')) return;
     const { error } = await supabase.from('mentis_venues').delete().eq('id', id);
     if (error) alert(error.message); else load();
+    setShowDeleteVenue(null);
   };
   return (
     <div>
@@ -38,9 +40,18 @@ export function Venues() {
         <thead><tr><th>Name</th><th>Address</th><th>Limit</th><th></th></tr></thead>
         <tbody>{rows.map((v: any) => (
           <tr key={v.id}><td className="font-semibold">{v.name}</td><td>{v.address}</td><td>{v.concurrent_session_limit}</td>
-            <td><button className="btn btn-ghost" onClick={() => remove(v.id)}>Delete</button></td></tr>
+            <td><button className="btn btn-ghost" onClick={() => setShowDeleteVenue(v.id)}>Delete</button></td></tr>
         ))}</tbody>
       </table></div>
+      <ConfirmDialog
+        open={!!showDeleteVenue}
+        onOpenChange={(open) => setShowDeleteVenue(open ? showDeleteVenue : null)}
+        title="Delete venue?"
+        description="Sessions must be moved first. This action cannot be undone."
+        confirmLabel="Delete venue"
+        destructive
+        onConfirm={() => { if (showDeleteVenue) remove(showDeleteVenue); }}
+      />
     </div>
   );
 }
@@ -133,11 +144,11 @@ export function Holidays() {
   };
   return (
     <div>
-      <PageTitle title="Holiday calendar" sub="Term weeks, bank holidays, manual no-session ranges" />
+      <PageTitle title="Holiday calendar" sub="Term breaks, bank holidays, manual no-session ranges" />
       <div className="card p-4 mb-4 flex flex-wrap gap-2 items-end">
         <input className="input" style={{ width: 200 }} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         <select className="input" style={{ width: 170 }} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-          <option value="manual">Manual range</option><option value="term_holiday_week">Term-holiday week</option><option value="bank_holiday">Bank holiday</option>
+          <option value="manual">Manual range</option><option value="term_break">Term break</option><option value="bank_holiday">Bank holiday</option>
         </select>
         <label className="text-sm">From <input type="date" className="input" value={form.starts_on} onChange={(e) => setForm({ ...form, starts_on: e.target.value })} /></label>
         <label className="text-sm">To <input type="date" className="input" value={form.ends_on} onChange={(e) => setForm({ ...form, ends_on: e.target.value })} /></label>
@@ -195,7 +206,19 @@ export function Overrides() {
         <button className="btn btn-ghost" onClick={doPreview}>Preview affected ({preview.length})</button>
         <button className="btn btn-primary" onClick={save}>Apply override</button>
       </div>
-      {preview.length > 0 && <div className="card p-3 mb-4 text-sm">Affected: {preview.map((p) => `${p.name} ${new Date(p.start_at).toLocaleDateString()}`).join(' · ')}</div>}
+      {preview.length > 0 && (
+        <div className="mb-4">
+          <ReviewAndConfirmBanner
+            title="Review and confirm"
+            description="This override affects the matching recurring sessions in the selected date range. Review the impacted dates before saving."
+            count={preview.length}
+            range={`${form.starts_at || '—'} → ${form.ends_at || '—'}`}
+            skipBankHolidays={false}
+            skipTermHolidays={false}
+            tone={preview.length >= 5 ? 'warning' : 'neutral'}
+          />
+        </div>
+      )}
       <div className="card p-2"><table className="grid">
         <thead><tr><th>Range</th><th>Override</th><th>At</th></tr></thead>
         <tbody>{rows.map((r: any) => (

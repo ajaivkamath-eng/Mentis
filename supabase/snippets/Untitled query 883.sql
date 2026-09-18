@@ -16,6 +16,7 @@ set roles = excluded.roles,
     
     select * from  mentis_customers;
 
+    select * from  mentis_members;
 
     select * from  mentis_organizations;
     
