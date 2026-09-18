@@ -208,6 +208,14 @@ export function Sessions() {
   const [loading, setLoading] = useState(true);
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [memberSearch, setMemberSearch] = useState('');
+  const [tasters, setTasters] = useState<any[]>([]);
+  const [enrollScope, setEnrollScope] = useState<'series' | 'instance'>('series');
+
+  // Column filtering and sorting
+  const [memberSortOrder, setMemberSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [memberTypeFilter, setMemberTypeFilter] = useState<'all' | 'regular' | 'taster' | 'alert'>('all');
+  const [dateColumnFilters, setDateColumnFilters] = useState<Record<string, 'all' | 'present' | 'absent' | 'late'>>({});
+  const [pctSortOrder, setPctSortOrder] = useState<'none' | 'asc' | 'desc'>('none');
 
   const [selectedVenue, setSelectedVenue] = useState<string>('all');
   const [selectedGroupKey, setSelectedGroupKey] = useState<string>('');
@@ -862,14 +870,16 @@ export function Sessions() {
         return;
       }
       try {
-        const [{ data: vData }, { data: hData }, { data: sData }, { data: eData }, { data: aData }, { data: mData }] = await Promise.all([
+        const [{ data: vData }, { data: hData }, { data: sData }, { data: eData }, { data: aData }, { data: mData }, { data: tData }] = await Promise.all([
           supabase.from('mentis_venues').select('id,name'),
           supabase.from('mentis_holiday_calendar').select('*').order('starts_on'),
           supabase.from('mentis_sessions').select('id,name,venue_id,start_at,end_at,status,schedule_id,mentis_venues(name)').order('start_at').limit(300),
           supabase.from('mentis_enrollments').select('session_id,member_id,mentis_members(id,name)').limit(1000),
           supabase.from('mentis_attendance_records').select('session_id,member_id,status').limit(2000),
           supabase.from('mentis_members').select('id,name').order('name').limit(500),
+          supabase.from('mentis_prospects').select('id,name,status').limit(200),
         ]);
+        setTasters(tData ?? []);
         if (!alive) return;
         const v = (vData ?? []) as Venue[];
         setVenues(v);
@@ -925,9 +935,19 @@ export function Sessions() {
           ...g,
           sessions: g.sessions.sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)),
         })).sort((a, b) => {
-          const ad = new Date(a.sessions[0]?.start_at ?? 0); const bd = new Date(b.sessions[0]?.start_at ?? 0);
-          const weekday = (d: Date) => (d.getDay() + 6) % 7;
-          return weekday(ad) - weekday(bd) || (ad.getHours() * 60 + ad.getMinutes()) - (bd.getHours() * 60 + bd.getMinutes()) || a.name.localeCompare(b.name);
+          const ad = new Date(a.sessions[0]?.start_at ?? 0);
+          const bd = new Date(b.sessions[0]?.start_at ?? 0);
+          // Sequence sheets Monday (0) to Sunday (6) strictly:
+          const monFirstDay = (d: Date) => (d.getDay() + 6) % 7;
+          const dayDiff = monFirstDay(ad) - monFirstDay(bd);
+          if (dayDiff !== 0) return dayDiff;
+
+          // Then order chronologically by session start time:
+          const timeA = ad.getHours() * 60 + ad.getMinutes();
+          const timeB = bd.getHours() * 60 + bd.getMinutes();
+          if (timeA !== timeB) return timeA - timeB;
+
+          return a.name.localeCompare(b.name);
         });
 
         setGroups(allGroups);
@@ -966,8 +986,24 @@ export function Sessions() {
       list = list.filter(m => m.name.toLowerCase().includes(q));
     }
     if (showOnlyAlert) list = list.filter(m => m.alert);
+
+    // Apply column filter for Member Type
+    if (memberTypeFilter === 'alert') {
+      list = list.filter(m => m.alert);
+    } else if (memberTypeFilter === 'regular') {
+      list = list.filter(m => !m.customer?.includes('Taster'));
+    } else if (memberTypeFilter === 'taster') {
+      list = list.filter(m => m.customer?.includes('Taster') || tasters.some(t => t.name === m.name));
+    }
+
+    // Apply Member Column Sorting
+    list = [...list].sort((a, b) => {
+      const cmp = a.name.localeCompare(b.name);
+      return memberSortOrder === 'asc' ? cmp : -cmp;
+    });
+
     return list;
-  }, [selectedGroup, members, search, showOnlyAlert]);
+  }, [selectedGroup, members, search, showOnlyAlert, memberTypeFilter, memberSortOrder, tasters]);
 
   const attendanceMap = useMemo(() => {
     const map = new Map<string, Attendance['status']>();
@@ -1214,11 +1250,21 @@ export function Sessions() {
                       />
                     </span>
                   )}
-                  <span className="max-w-[20ch] truncate" title={`${g.dayLabel ?? ''} · ${g.timeLabel}`}>{g.name}</span>
+                  {/* Tab face shows clean session name only; Day, time & venue appear in tooltip */}
+                  <span
+                    className="max-w-[22ch] truncate"
+                    title={`${g.name}\n${g.dayLabel ?? ''} · ${g.timeLabel}\nVenue: ${g.venue_name}\n${g.memberIds.length} members enrolled`}
+                  >
+                    {g.name}
+                  </span>
                   {holidayCount > 0 && (
-                    <span className="rounded-full bg-danger-soft px-1 py-0.5 text-[9px] font-bold text-danger">{holidayCount} HOL</span>
+                    <span className="rounded-full bg-danger-soft px-1 py-0.5 text-[9px] font-bold text-danger" title={`${holidayCount} holiday/term breaks in this pattern`}>
+                      {holidayCount} HOL
+                    </span>
                   )}
-                  <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] tabular-nums">{g.memberIds.length}</span>
+                  <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] tabular-nums" title={`${g.memberIds.length} enrolled members`}>
+                    {g.memberIds.length}
+                  </span>
                 </button>
               );
             })
@@ -1263,18 +1309,12 @@ export function Sessions() {
               />
               <div className="flex items-center gap-1 rounded-md border border-line bg-surface-inset p-0.5">
                 <button
+                  type="button"
                   onClick={() => setShowOnlyAlert(!showOnlyAlert)}
                   className={cn('rounded-[5px] px-2 py-1 text-[11px] font-semibold', showOnlyAlert ? 'bg-amber-500/15 text-amber-600' : 'text-ink-faint hover:text-ink')}
-                  title="Only show ⚠️"
+                  title="Only show medical/safeguarding alert rows"
                 >
-                  ⚠️
-                </button>
-                <button
-                  onClick={() => setAttendanceFilter(f => f === 'all' ? 'absent' : 'all')}
-                  className={cn('rounded-[5px] px-2 py-1 text-[11px] font-semibold', attendanceFilter !== 'all' ? 'bg-surface-raised shadow-sm text-ink' : 'text-ink-faint hover:text-ink')}
-                >
-                  <Filter className="size-3 inline mr-1" />
-                  {attendanceFilter === 'all' ? 'All' : 'Absent only'}
+                  ⚠️ Alerts
                 </button>
               </div>
               {canDo('sessions.manage') && (
@@ -1340,22 +1380,46 @@ export function Sessions() {
                 <table className="w-full border-collapse text-xs" style={{ minWidth: 900 }}>
                   <thead className="sticky top-0 z-20 bg-surface">
                     <tr>
-                      <th className="sticky left-0 z-30 w-[200px] border-b border-r border-line bg-surface p-2 text-left">
-                        <div className="flex items-center gap-2">
-                          <Users className="size-3.5 text-ink-faint" />
-                          <span className="text-[11px] font-bold uppercase tracking-wide">Members</span>
-                          <span className="ml-auto rounded-full bg-surface-inset px-1.5 py-0.5 text-[10px] tabular-nums">{groupMembers.length}</span>
+                      <th className="sticky left-0 z-30 w-[220px] border-b border-r border-line bg-surface p-2 text-left">
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2">
+                            <Users className="size-3.5 text-ink-faint" />
+                            <span className="text-[11px] font-bold uppercase tracking-wide">Members</span>
+                            <span className="ml-auto rounded-full bg-surface-inset px-1.5 py-0.5 text-[10px] tabular-nums">{groupMembers.length}</span>
+                          </div>
+                          <div className="flex items-center gap-1 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setMemberSortOrder(s => s === 'asc' ? 'desc' : 'asc')}
+                              className="rounded border border-line bg-surface-inset px-1.5 py-0.5 font-semibold text-ink hover:text-brand"
+                              title="Sort alphabetically"
+                            >
+                              Sort: {memberSortOrder === 'asc' ? 'A→Z' : 'Z→A'}
+                            </button>
+                            <select
+                              className="rounded border border-line bg-surface-inset px-1 py-0.5 text-[10px]"
+                              value={memberTypeFilter}
+                              onChange={e => setMemberTypeFilter(e.target.value as any)}
+                              title="Filter member type"
+                            >
+                              <option value="all">All</option>
+                              <option value="regular">Regular</option>
+                              <option value="taster">Tasters</option>
+                              <option value="alert">Alerts</option>
+                            </select>
+                          </div>
                         </div>
                       </th>
                       {visibleSessions.map(sess => {
                         const dateStr = sess.start_at.slice(0, 10);
                         const hol = isDateInHolidays(dateStr, holidays);
                         const isWeekend = new Date(sess.start_at).getDay() === 0 || new Date(sess.start_at).getDay() === 6;
+                        const colFilter = dateColumnFilters[sess.id] || 'all';
                         return (
                           <th
                             key={sess.id}
                             className={cn(
-                              'min-w-[72px] border-b border-r border-line p-1 text-center align-bottom',
+                              'min-w-[80px] border-b border-r border-line p-1 text-center align-bottom',
                               hol
                                 ? 'bg-danger text-white'
                                 : isWeekend
@@ -1391,16 +1455,41 @@ export function Sessions() {
                                   <span className={cn('text-[10px] font-medium', isWeekend ? 'text-ink-faint' : 'text-ink-muted')}>{formatDay(sess.start_at)}</span>
                                   <span className="text-[11px] font-bold tabular-nums">{formatDateShort(sess.start_at)}</span>
                                   <span className="text-[9px] text-ink-faint tabular-nums">{new Date(sess.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                  <span className="mt-1 rounded-full bg-surface-inset px-1 py-0 text-[9px] tabular-nums">
+                                  <span className="mt-0.5 rounded-full bg-surface-inset px-1 py-0 text-[9px] tabular-nums">
                                     {attendance.filter(a => a.session_id === sess.id && a.status === 'present').length}/{selectedGroup.memberIds.length}
                                   </span>
                                 </div>
                               )}
                             </button>
+                            {!hol && (
+                              <div className="mt-1 border-t border-line/40 pt-0.5">
+                                <select
+                                  className="w-full bg-transparent text-[9px] font-medium text-ink-muted focus:outline-none"
+                                  value={colFilter}
+                                  onChange={e => setDateColumnFilters(prev => ({ ...prev, [sess.id]: e.target.value as any }))}
+                                  title="Filter attendance on this date"
+                                >
+                                  <option value="all">All</option>
+                                  <option value="present">Present</option>
+                                  <option value="absent">Absent</option>
+                                  <option value="late">Late</option>
+                                </select>
+                              </div>
+                            )}
                           </th>
                         );
                       })}
-                      <th className="sticky right-0 z-20 w-[68px] border-b border-l border-line bg-surface p-1 text-center text-[10px] font-bold uppercase">%</th>
+                      <th className="sticky right-0 z-20 w-[68px] border-b border-l border-line bg-surface p-1 text-center text-[10px] font-bold uppercase">
+                        <div>%</div>
+                        <button
+                          type="button"
+                          onClick={() => setPctSortOrder(p => p === 'none' ? 'desc' : p === 'desc' ? 'asc' : 'none')}
+                          className="mt-0.5 text-[9px] font-semibold text-ink-muted hover:text-brand"
+                          title="Sort by attendance percentage"
+                        >
+                          {pctSortOrder === 'none' ? '↕ Sort' : pctSortOrder === 'desc' ? '↓ High' : '↑ Low'}
+                        </button>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1409,8 +1498,15 @@ export function Sessions() {
                       const presentCount = memberAttendances.filter(s => s === 'present').length;
                       const totalValid = visibleSessions.filter(s => !isDateInHolidays(s.start_at.slice(0, 10), holidays)).length;
                       const pctVal = totalValid ? Math.round((presentCount / totalValid) * 100) : 0;
-                      const filteredOutByAttendance = attendanceFilter === 'absent' && !memberAttendances.includes('absent');
-                      if (filteredOutByAttendance) return null;
+                      // Check date column filters
+                      const matchesDateFilters = visibleSessions.every(sess => {
+                        const colF = dateColumnFilters[sess.id];
+                        if (!colF || colF === 'all') return true;
+                        const status = attendanceMap.get(`${m.id}|${sess.id}`) ?? 'absent';
+                        return status === colF;
+                      });
+                      if (!matchesDateFilters) return null;
+
                       return (
                         <tr key={m.id} className={cn('group/row', idx % 2 === 0 ? 'bg-surface' : 'bg-surface-hover/30')}>
                           <td className="sticky left-0 z-10 border-b border-r border-line bg-inherit p-2">
@@ -1850,17 +1946,113 @@ export function Sessions() {
 
       <Dialog open={showMemberPicker} onOpenChange={setShowMemberPicker}>
         <DialogContent size="md">
-          <DialogHeader><DialogTitle>Add member to {selectedGroup?.name}</DialogTitle><DialogDescription>Search members and tasters. Already enrolled members are disabled.</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Add member to {selectedGroup?.name}</DialogTitle>
+            <DialogDescription>
+              Search members and tasters. Choose whether to add to all sessions in this recurring series or the selected date.
+            </DialogDescription>
+          </DialogHeader>
           <DialogBody>
-            <input className="input mb-3 w-full" placeholder="Search members or tasters…" value={memberSearch} onChange={e => setMemberSearch(e.target.value)} />
+            <div className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-surface-inset p-2 text-xs">
+              <span className="font-semibold text-ink">Enrollment Scope:</span>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="enrollScope"
+                  checked={enrollScope === 'series'}
+                  onChange={() => setEnrollScope('series')}
+                  className="accent-brand"
+                />
+                All dates in recurring series
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="enrollScope"
+                  checked={enrollScope === 'instance'}
+                  onChange={() => setEnrollScope('instance')}
+                  className="accent-brand"
+                />
+                This session date only
+              </label>
+            </div>
+
+            <input
+              className="input mb-3 w-full"
+              placeholder="Search members or tasters…"
+              value={memberSearch}
+              onChange={e => setMemberSearch(e.target.value)}
+            />
+
             <div className="max-h-80 overflow-auto divide-y divide-line">
-              {members.filter(m => m.name.toLowerCase().includes(memberSearch.toLowerCase())).map(m => {
-                const enrolled = selectedGroup?.memberIds.includes(m.id);
-                return <button key={m.id} disabled={enrolled} className="flex w-full items-center justify-between p-3 text-left hover:bg-surface-hover disabled:opacity-40" onClick={async () => { if (!selectedGroup || enrolled) return; await supabase.from('mentis_enrollments').insert({ session_id: selectedGroup.sessions[0]?.id, member_id: m.id }); setGroups(gs => gs.map(g => g.key === selectedGroup.key ? { ...g, memberIds: [...g.memberIds, m.id] } : g)); setShowMemberPicker(false); }}><span>{m.name}</span><span className="text-xs text-ink-muted">{enrolled ? 'Added' : 'Add · includes tasters'}</span></button>;
-              })}
+              {/* Combine Regular Members and Tasters */}
+              {[
+                ...members.map(m => ({ ...m, isTaster: false })),
+                ...tasters
+                  .filter(t => !members.some(m => m.id === t.id))
+                  .map(t => ({ id: t.id, name: t.name, isTaster: true })),
+              ]
+                .filter(m => m.name.toLowerCase().includes(memberSearch.toLowerCase()))
+                .map(m => {
+                  const enrolled = selectedGroup?.memberIds.includes(m.id);
+                  return (
+                    <button
+                      key={m.id}
+                      disabled={enrolled}
+                      className="flex w-full items-center justify-between p-3 text-left hover:bg-surface-hover disabled:opacity-40"
+                      onClick={async () => {
+                        if (!selectedGroup || enrolled) return;
+                        if (enrollScope === 'series') {
+                          // Enroll across all sessions in this group
+                          await Promise.all(
+                            selectedGroup.sessions.map(s =>
+                              supabase.from('mentis_enrollments').insert({
+                                session_id: s.id,
+                                member_id: m.isTaster ? undefined : m.id,
+                                status: 'active',
+                              })
+                            )
+                          );
+                        } else {
+                          // Enroll for current/first session
+                          await supabase.from('mentis_enrollments').insert({
+                            session_id: selectedGroup.sessions[0]?.id,
+                            member_id: m.isTaster ? undefined : m.id,
+                            status: 'active',
+                          });
+                        }
+
+                        setGroups(gs =>
+                          gs.map(g =>
+                            g.key === selectedGroup.key
+                              ? { ...g, memberIds: [...g.memberIds, m.id] }
+                              : g
+                          )
+                        );
+                        setShowMemberPicker(false);
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold">{m.name}</span>
+                        {m.isTaster && (
+                          <span className="rounded bg-info-soft px-1.5 py-0.5 text-[10px] font-bold text-info">
+                            Taster
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-ink-muted">
+                        {enrolled ? 'Already Added' : '+ Enroll'}
+                      </span>
+                    </button>
+                  );
+                })}
             </div>
           </DialogBody>
-          <DialogFooter><button className="btn btn-ghost" onClick={() => setShowMemberPicker(false)}>Close</button></DialogFooter>
+          <DialogFooter>
+            <button className="btn btn-ghost" onClick={() => setShowMemberPicker(false)}>
+              Close
+            </button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1906,6 +2098,14 @@ export function Scheduling() {
     end_at: '',
     status: 'scheduled',
   });
+  const [responsibleCoachId, setResponsibleCoachId] = useState('');
+  const [leadingCoachId, setLeadingCoachId] = useState('');
+  const [assistingCoachId, setAssistingCoachId] = useState('');
+  const [staffList, setStaffList] = useState<any[]>([]);
+
+  // Sorting for Scheduling table
+  const [tableSortColumn, setTableSortColumn] = useState<'name' | 'venue' | 'start_at' | 'headcount' | 'status'>('start_at');
+  const [tableSortDirection, setTableSortDirection] = useState<'asc' | 'desc'>('asc');
   const [form, setForm] = useState({ name: '', venue_id: '', day_of_week: 2, valid_from: '', valid_to: '', start_time: '18:00', end_time: '19:00' });
 
   const toInputDateTime = (iso: string | null | undefined) => {
@@ -1924,17 +2124,19 @@ export function Scheduling() {
 
   const load = async () => {
     const orgId = staff?.organization_id;
-    const [scheduleRes, holidayRes, venueRes, sessionRes, enrollmentRes] = await Promise.all([
+    const [scheduleRes, holidayRes, venueRes, sessionRes, enrollmentRes, staffRes] = await Promise.all([
       supabase.from('mentis_weekly_schedules').select('*,mentis_venues(name)').eq('organization_id', orgId ?? ''),
       supabase.from('mentis_holiday_calendar').select('*').order('starts_on'),
       supabase.from('mentis_venues').select('id,name').eq('organization_id', orgId ?? ''),
-      supabase.from('mentis_sessions').select('id,name,venue_id,status,start_at,end_at,schedule_id,mentis_venues(name)').eq('organization_id', orgId ?? '').order('start_at', { ascending: true }),
+      supabase.from('mentis_sessions').select('id,name,venue_id,status,start_at,end_at,schedule_id,responsible_coach_id,leading_coach_id,assisting_coach_id,mentis_venues(name)').eq('organization_id', orgId ?? '').order('start_at', { ascending: true }),
       supabase.from('mentis_enrollments').select('session_id'),
+      supabase.from('mentis_staff').select('id,display_name,roles'),
     ]);
 
     setSchedules(scheduleRes.data ?? []);
     setHolidays(holidayRes.data ?? []);
     setVenues(venueRes.data ?? []);
+    setStaffList(staffRes.data ?? []);
 
     const counts = new Map<string, number>();
     (enrollmentRes.data ?? []).forEach((row: any) => {
@@ -1975,6 +2177,9 @@ export function Scheduling() {
       start_at: new Date(sessionForm.start_at).toISOString(),
       end_at: new Date(sessionForm.end_at).toISOString(),
       status: sessionForm.status,
+      responsible_coach_id: responsibleCoachId || null,
+      leading_coach_id: leadingCoachId || null,
+      assisting_coach_id: assistingCoachId || null,
     };
 
     if (editingSessionId) {
@@ -2015,6 +2220,9 @@ export function Scheduling() {
       end_at: toInputDateTime(session.end_at),
       status: session.status,
     });
+    setResponsibleCoachId(session.responsible_coach_id || '');
+    setLeadingCoachId(session.leading_coach_id || '');
+    setAssistingCoachId(session.assisting_coach_id || '');
   };
 
   const generate = async (sch: any) => {
@@ -2038,12 +2246,26 @@ export function Scheduling() {
     load();
   };
 
-  const filteredSessions = allSessions.filter(session => {
-    const matchesVenue = selectedVenueFilter === 'all' || session.venue_id === selectedVenueFilter;
-    const matchesSearch = !sessionSearch.trim() || session.name.toLowerCase().includes(sessionSearch.trim().toLowerCase());
-    const matchesStatus = sessionStatusFilter === 'all' || session.status === sessionStatusFilter;
-    return matchesVenue && matchesSearch && matchesStatus;
-  });
+  const filteredSessions = useMemo(() => {
+    let list = allSessions.filter(session => {
+      const matchesVenue = selectedVenueFilter === 'all' || session.venue_id === selectedVenueFilter;
+      const matchesSearch = !sessionSearch.trim() || session.name.toLowerCase().includes(sessionSearch.trim().toLowerCase());
+      const matchesStatus = sessionStatusFilter === 'all' || session.status === sessionStatusFilter;
+      return matchesVenue && matchesSearch && matchesStatus;
+    });
+
+    list = [...list].sort((a, b) => {
+      let cmp = 0;
+      if (tableSortColumn === 'name') cmp = a.name.localeCompare(b.name);
+      else if (tableSortColumn === 'venue') cmp = (a.venue_name || '').localeCompare(b.venue_name || '');
+      else if (tableSortColumn === 'start_at') cmp = Date.parse(a.start_at) - Date.parse(b.start_at);
+      else if (tableSortColumn === 'headcount') cmp = (a.headcount || 0) - (b.headcount || 0);
+      else if (tableSortColumn === 'status') cmp = a.status.localeCompare(b.status);
+      return tableSortDirection === 'asc' ? cmp : -cmp;
+    });
+
+    return list;
+  }, [allSessions, selectedVenueFilter, sessionSearch, sessionStatusFilter, tableSortColumn, tableSortDirection]);
 
   const selectedSession = useMemo(
     () => allSessions.find(session => session.id === selectedSessionId) ?? filteredSessions[0] ?? null,
@@ -2266,7 +2488,7 @@ export function Scheduling() {
         <DialogContent size="md">
           <DialogHeader>
             <DialogTitle>Create session</DialogTitle>
-            <DialogDescription>Add a single session instance for the selected venue and time.</DialogDescription>
+            <DialogDescription>Add a single session instance with coach placeholders and assignments.</DialogDescription>
           </DialogHeader>
           <DialogBody className="space-y-4">
             <label className="block text-sm">
@@ -2290,6 +2512,35 @@ export function Scheduling() {
                 <input type="datetime-local" className="input mt-1" value={sessionForm.end_at} onChange={(e) => setSessionForm({ ...sessionForm, end_at: e.target.value })} />
               </label>
             </div>
+
+            {/* Coach Assignment Placeholders */}
+            <div className="rounded-lg border border-line bg-surface-inset p-3 space-y-3">
+              <div className="text-xs font-bold text-ink uppercase tracking-wide">Coach Placeholders & Staffing</div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="block text-xs">
+                  Responsible Coach
+                  <select className="input mt-1 text-xs" value={responsibleCoachId} onChange={e => setResponsibleCoachId(e.target.value)}>
+                    <option value="">Select coach</option>
+                    {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+                  </select>
+                </label>
+                <label className="block text-xs">
+                  Leading Coach
+                  <select className="input mt-1 text-xs" value={leadingCoachId} onChange={e => setLeadingCoachId(e.target.value)}>
+                    <option value="">Select coach</option>
+                    {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+                  </select>
+                </label>
+                <label className="block text-xs">
+                  Assisting Coach
+                  <select className="input mt-1 text-xs" value={assistingCoachId} onChange={e => setAssistingCoachId(e.target.value)}>
+                    <option value="">Select coach</option>
+                    {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+
             <label className="block text-sm">
               Status
               <select className="input mt-1" value={sessionForm.status} onChange={(e) => setSessionForm({ ...sessionForm, status: e.target.value })}>
@@ -2381,11 +2632,36 @@ export function Scheduling() {
                 <thead className="bg-surface-inset text-ink-faint">
                   <tr>
                     {bulkSessionMode && <th className="px-3 py-2 w-8"><span className="sr-only">Select</span></th>}
-                    <th className="px-3 py-2">Session</th>
-                    <th className="px-3 py-2">Timing</th>
-                    <th className="px-3 py-2">Venue</th>
-                    <th className="px-3 py-2">Headcount</th>
-                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2 cursor-pointer select-none" onClick={() => {
+                      if (tableSortColumn === 'name') setTableSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setTableSortColumn('name'); setTableSortDirection('asc'); }
+                    }}>
+                      Session {tableSortColumn === 'name' ? (tableSortDirection === 'asc' ? '↑' : '↓') : ''}
+                    </th>
+                    <th className="px-3 py-2 cursor-pointer select-none" onClick={() => {
+                      if (tableSortColumn === 'start_at') setTableSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setTableSortColumn('start_at'); setTableSortDirection('asc'); }
+                    }}>
+                      Timing {tableSortColumn === 'start_at' ? (tableSortDirection === 'asc' ? '↑' : '↓') : ''}
+                    </th>
+                    <th className="px-3 py-2 cursor-pointer select-none" onClick={() => {
+                      if (tableSortColumn === 'venue') setTableSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setTableSortColumn('venue'); setTableSortDirection('asc'); }
+                    }}>
+                      Venue {tableSortColumn === 'venue' ? (tableSortDirection === 'asc' ? '↑' : '↓') : ''}
+                    </th>
+                    <th className="px-3 py-2 cursor-pointer select-none" onClick={() => {
+                      if (tableSortColumn === 'headcount') setTableSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setTableSortColumn('headcount'); setTableSortDirection('asc'); }
+                    }}>
+                      Headcount {tableSortColumn === 'headcount' ? (tableSortDirection === 'asc' ? '↑' : '↓') : ''}
+                    </th>
+                    <th className="px-3 py-2 cursor-pointer select-none" onClick={() => {
+                      if (tableSortColumn === 'status') setTableSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setTableSortColumn('status'); setTableSortDirection('asc'); }
+                    }}>
+                      Status {tableSortColumn === 'status' ? (tableSortDirection === 'asc' ? '↑' : '↓') : ''}
+                    </th>
                     <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -2529,30 +2805,52 @@ export function Tasks() {
 export function Inbox() {
   const [rows, setRows] = useState<any[]>([]);
   const [filter, setFilter] = useState('open');
-  const load = () => supabase.from('mentis_pending_actions').select('*,mentis_action_types(name)').order('due_at').limit(100).then(({ data }) => setRows(data ?? []));
+  const load = () => supabase
+    .from('mentis_pending_actions')
+    .select('*, mentis_action_types(name), mentis_staff!mentis_pending_actions_assignee_id_fkey(display_name)')
+    .order('due_at')
+    .limit(100)
+    .then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const close = async (a: any) => {
     await supabase.from('mentis_pending_actions').update({ status: 'closed' }).eq('id', a.id);
     load();
   };
-  const visible = rows.filter((r: any) => filter === 'all' || r.status === filter);
+  const visible = rows.filter((r: any) => {
+    if (filter === 'all') return true;
+    if (filter === 'staffing') return r.title.toLowerCase().includes('staff') || r.mentis_action_types?.name?.toLowerCase().includes('staff');
+    return r.status === filter;
+  });
+  const resolve = async (a: any) => {
+    await supabase.from('mentis_pending_actions').update({ status: 'closed' }).eq('id', a.id);
+    load();
+  };
   return (
     <div>
       <PageHeader title="Inbox" subtitle="Pending actions queue" actions={
         <span className="flex gap-2">
           <Link to="/actions/new" className="btn btn-primary">New manual action</Link>
           <select className="input" style={{ width: 'auto' }} value={filter} onChange={(e) => setFilter(e.target.value)}>
-            <option value="open">Open</option><option value="breached">Breached</option><option value="closed">Closed</option><option value="all">All</option>
+            <option value="open">Open</option><option value="breached">Breached</option><option value="closed">Closed</option><option value="staffing">Staffing</option><option value="all">All</option>
           </select>
         </span>
       } />
       <div className="card p-2"><table className="grid">
-        <thead><tr><th>Action</th><th>Type</th><th>Due</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Action</th><th>Type</th><th>Assignee</th><th>Due</th><th>Breach</th><th>Status</th><th></th></tr></thead>
         <tbody>{visible.map((a: any) => (
           <tr key={a.id}><td className="font-semibold">{a.title}</td><td>{a.mentis_action_types?.name}</td>
+            <td>{a.mentis_staff?.display_name ?? 'Unassigned'}</td>
             <td>{new Date(a.due_at).toLocaleDateString()}</td>
+            <td>{a.breach_at ? new Date(a.breach_at).toLocaleDateString() : '—'}</td>
             <td><span className="badge" style={{ background: a.status === 'breached' ? 'var(--danger)' : 'var(--border)', color: a.status === 'breached' ? '#fff' : undefined }}>{a.status}</span></td>
-            <td>{a.status !== 'closed' && <button className="btn btn-primary" onClick={() => close(a)}>Close</button>}</td></tr>
+            <td>
+              {a.status !== 'closed' && (
+                <div className="flex gap-2">
+                  <button className="btn btn-primary" onClick={() => close(a)}>Close</button>
+                  <button className="btn btn-ghost" onClick={() => resolve(a)}>Resolve</button>
+                </div>
+              )}
+            </td></tr>
         ))}</tbody>
       </table></div>
     </div>

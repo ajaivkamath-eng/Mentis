@@ -187,3 +187,103 @@ export function Charges() {
     </div>
   );
 }
+
+/* ---------- Operational & Financial Reconciliation Engine ---------- */
+export function Reconciliation() {
+  const { staff } = useAuth();
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [staffing, setStaffing] = useState<any[]>([]);
+  const [timeEntries, setTimeEntries] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadAll = async () => {
+    setLoading(true);
+    const [sessRes, staffRes, teRes, invRes] = await Promise.all([
+      supabase.from('mentis_sessions').select('id, name, start_at, end_at, status, venue_id, mentis_venues(name)').order('start_at', { ascending: false }).limit(200),
+      supabase.from('mentis_session_staffing').select('*, mentis_staff(display_name), mentis_rate_cards(rate_cents, label)'),
+      supabase.from('mentis_staff_time_entries').select('*, mentis_staff(display_name)'),
+      supabase.from('mentis_invoices').select('*, mentis_invoice_lines(*)'),
+    ]);
+    setSessions(sessRes.data ?? []);
+    setStaffing(staffRes.data ?? []);
+    setTimeEntries(teRes.data ?? []);
+    setInvoices(invRes.data ?? []);
+    setLoading(false);
+  };
+
+  useEffect(() => { loadAll(); }, []);
+
+  // Discrepancy checks:
+  // 1. Unstaffed scheduled sessions
+  const unstaffedSessions = sessions.filter(s => s.status === 'scheduled' && !staffing.some(st => st.session_id === s.id));
+
+  // 2. Completed sessions without logged time entries
+  const unloggedCompleted = sessions.filter(s => s.status === 'completed' && !timeEntries.some(te => te.session_id === s.id));
+
+  // 3. Unbilled time entries
+  const unbilledTimeEntries = timeEntries.filter(te => te.bill_state === 'unbilled');
+
+  const plannedStaffingCost = staffing.reduce((sum, row) => {
+    const hours = Math.max(0, (new Date(row.planned_end).getTime() - new Date(row.planned_start).getTime()) / 3_600_000);
+    return sum + hours * ((row.mentis_rate_cards?.rate_cents ?? 0) / 100);
+  }, 0);
+
+  return (
+    <div className="space-y-4">
+      <PageTitle title="Reconciliation Dashboard" sub="Sessions ↔ Staff Assignments ↔ Timesheets ↔ Invoices cross-audit" />
+
+      {loading ? (
+        <div className="card p-8 text-center text-xs text-ink-muted">Loading audit records…</div>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="card p-4">
+              <div className="text-xs font-semibold text-ink-muted">Unstaffed Sessions</div>
+              <div className="text-2xl font-bold text-danger mt-1">{unstaffedSessions.length}</div>
+              <div className="text-[11px] text-ink-faint mt-1">Scheduled sessions with no coach assigned</div>
+            </div>
+
+            <div className="card p-4">
+              <div className="text-xs font-semibold text-ink-muted">Completed Sessions Missing Timesheets</div>
+              <div className="text-2xl font-bold text-warning mt-1">{unloggedCompleted.length}</div>
+              <div className="text-[11px] text-ink-faint mt-1">Sessions finished but no hours logged for staff</div>
+            </div>
+
+            <div className="card p-4">
+              <div className="text-xs font-semibold text-ink-muted">Unbilled Time Entries</div>
+              <div className="text-2xl font-bold text-ink mt-1">{unbilledTimeEntries.length}</div>
+              <div className="text-[11px] text-ink-faint mt-1">Ready to be included in billing invoices</div>
+            </div>
+          </div>
+
+          <div className="card p-4 text-sm">
+            <div className="font-bold text-ink-muted mb-2">Planned staffing cost</div>
+            <div className="text-2xl font-black">£{plannedStaffingCost.toFixed(2)}</div>
+            <div className="text-[11px] text-ink-faint mt-1">Calculated from assigned coach rate cards × planned hours</div>
+          </div>
+
+          <div className="card p-4">
+            <h3 className="font-bold text-sm mb-3">Reconciliation Detail: Unstaffed Sessions</h3>
+            <div className="max-h-60 overflow-auto divide-y divide-line text-xs">
+              {unstaffedSessions.length === 0 ? (
+                <p className="p-4 text-center text-ink-muted">All scheduled sessions have staffing assigned!</p>
+              ) : (
+                unstaffedSessions.map(s => (
+                  <div key={s.id} className="py-2 flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold">{s.name}</span>
+                      <span className="text-ink-muted ml-2">({s.mentis_venues?.name}) · {new Date(s.start_at).toLocaleDateString()} {new Date(s.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <span className="badge bg-danger-soft text-danger">Needs Staff</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+

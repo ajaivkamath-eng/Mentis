@@ -77,7 +77,7 @@ insert into mentis_session_staffing (session_id, staff_id, capacity, rate_card_i
     '2026-03-03T18:00:00Z', '2026-03-03T19:00:00Z'
   from mentis_staff ms
   where ms.user_id in ('a0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000004')
-on conflict (session_id, staff_id, capacity) do nothing;
+on conflict (session_id, staff_id, capacity, planned_start) do nothing;
 
 -- 1. Medical visibility (rule 3) ----------------------------------------------
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000003');

@@ -5,7 +5,7 @@ import { Login, Dashboard, SearchPage, Users, Settings, Reports } from './pages/
 import { Today, Register, Feedback } from './pages/coaching';
 import { Members, Member360, Customers, Tasters } from './pages/entities';
 import { Sessions, Scheduling, Tasks, Inbox } from './pages/ops';
-import { Billing, Timesheet, Charges } from './pages/billing';
+import { Billing, Timesheet, Charges, Reconciliation } from './pages/billing';
 import { Events, MatchEntry, RankingEntry, Goals, Analytics } from './pages/comp';
 import { PublicTaster, PublicDiary, Microflow, Booking12 } from './pages/public';
 import { Venues, Groups, RateCards, Holidays, Overrides, ActionTimelines, Devices, AuditViewer } from './pages/manage';
@@ -70,6 +70,7 @@ export default function App() {
             <Route path="/actions/new" element={P('actions.createManual', <ActionCreate />)} />
             <Route path="/action-timelines" element={P('tasks.approve', <ActionTimelines />)} />
             <Route path="/billing" element={P('billing.viewOwn', <Billing />)} />
+            <Route path="/reconciliation" element={P('billing.viewAll', <Reconciliation />)} />
             <Route path="/timesheet" element={P('timesheet.self', <Timesheet />)} />
             <Route path="/charges" element={P('charges.viewOwn', <Charges />)} />
             <Route path="/rates" element={P('rates.manage', <RateCards />)} />
