@@ -3,7 +3,7 @@ import { AuthProvider, useAuth } from './lib/auth';
 import { Protected, Shell } from './lib/ui';
 import { Login, Dashboard, SearchPage, Users, Settings, Reports } from './pages/admin';
 import { Today, Register, Feedback } from './pages/coaching';
-import { Members, Member360, Customers, Tasters } from './pages/entities';
+import { Members, Member360, Customers, Customer360, Tasters } from './pages/entities';
 import { Sessions, Scheduling, Tasks, Inbox } from './pages/ops';
 import { Billing, Timesheet, Charges, Reconciliation } from './pages/billing';
 import { Events, MatchEntry, RankingEntry, Goals, Analytics } from './pages/comp';
@@ -55,6 +55,7 @@ export default function App() {
             <Route path="/members/:id" element={P('customers.view', <Member360 />)} />
             <Route path="/customers" element={P('customers.view', <Customers />)} />
             <Route path="/customers/new" element={P('customers.manage', <CustomerForm />)} />
+            <Route path="/customers/:id" element={P('customers.view', <Customer360 />)} />
             <Route path="/enrolments" element={P('sessions.manage', <Enrolments />)} />
             <Route path="/tasters" element={P('tasters.manage', <Tasters />)} />
             <Route path="/sessions" element={P('sessions.manage', <Sessions />)} />

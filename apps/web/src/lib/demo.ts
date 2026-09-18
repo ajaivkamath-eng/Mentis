@@ -9,8 +9,10 @@ import type { StaffRow } from './auth';
  * It signs you in as a Super Admin with no backend, so the shell, navigation,
  * ⌘K palette and the design-system page can be reviewed without a database.
  *
- * It never fakes data: queries simply return nothing, which is why every page
- * has a real empty/error state instead of a spinner that never resolves.
+ * It never writes demo records to a backend. Screens with a useful design-review
+ * fixture (people and diary) read deterministic local data; other queries can
+ * still show their real empty/error state instead of a spinner that never
+ * resolves.
  */
 const DEMO_FLAG = 'mentis.demoSession';
 
