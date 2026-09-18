@@ -235,3 +235,57 @@ export function ConfirmDialog({
     </Dialog>
   );
 }
+
+export function ReviewAndConfirmBanner({
+  title,
+  description,
+  count,
+  range,
+  skipBankHolidays,
+  skipTermHolidays,
+  tone = 'neutral',
+}: {
+  title: string;
+  description: string;
+  count: number;
+  range: string;
+  skipBankHolidays?: boolean;
+  skipTermHolidays?: boolean;
+  tone?: 'neutral' | 'warning';
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-lg border p-3',
+        tone === 'warning' ? 'border-danger/30 bg-danger-soft/10' : 'border-line bg-surface',
+      )}
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink-faint">{title}</div>
+        {count >= 5 && (
+          <div className="rounded-full border border-danger/30 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
+            This will affect {count} dates
+          </div>
+        )}
+      </div>
+
+      <div className="mb-3 text-[12px] text-ink-muted">{description}</div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-semibold text-ink-faint">
+          {range}
+        </span>
+        {skipBankHolidays && (
+          <span className="inline-flex items-center rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-semibold text-ink-faint">
+            skips bank holidays
+          </span>
+        )}
+        {skipTermHolidays && (
+          <span className="inline-flex items-center rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-semibold text-ink-faint">
+            skips term holidays
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}

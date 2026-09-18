@@ -16,6 +16,7 @@ import {
   Filter,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   MoreHorizontal,
   Sparkles,
   BookOpen,
@@ -23,6 +24,7 @@ import {
   Ban,
   CheckCheck,
   UserPlus,
+  Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
@@ -30,6 +32,7 @@ import { PageHeader } from '../components/patterns/page-header';
 import { Button } from '../components/ui/button';
 import { InputWithIcon } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter, ReviewAndConfirmBanner, ConfirmDialog } from '../components/ui/dialog';
 import { demoEnabled } from '../lib/demo';
 import { cn } from '../lib/cn';
 
@@ -50,7 +53,7 @@ type SessionInstance = {
 type Holiday = {
   id: string;
   name: string;
-  kind: 'term_holiday_week' | 'bank_holiday' | 'manual';
+  kind: 'term_break' | 'bank_holiday' | 'manual';
   starts_on: string;
   ends_on: string;
 };
@@ -87,10 +90,10 @@ function generateMock(): {
     { id: 'v3', name: 'St Marys School' },
   ];
   const holidays: Holiday[] = [
-    { id: 'h1', name: 'Half Term Break', kind: 'term_holiday_week', starts_on: '2025-10-27', ends_on: '2025-11-02' },
-    { id: 'h2', name: 'Christmas Break', kind: 'term_holiday_week', starts_on: '2025-12-20', ends_on: '2026-01-04' },
+    { id: 'h1', name: 'Half Term Break', kind: 'term_break', starts_on: '2025-10-27', ends_on: '2025-11-02' },
+    { id: 'h2', name: 'Christmas Break', kind: 'term_break', starts_on: '2025-12-20', ends_on: '2026-01-04' },
     { id: 'h3', name: 'Bank Holiday - New Year', kind: 'bank_holiday', starts_on: '2026-01-01', ends_on: '2026-01-01' },
-    { id: 'h4', name: 'Easter Break', kind: 'term_holiday_week', starts_on: '2026-03-30', ends_on: '2026-04-12' },
+    { id: 'h4', name: 'Easter Break', kind: 'term_break', starts_on: '2026-03-30', ends_on: '2026-04-12' },
   ];
 
   const memberNames = [
@@ -206,10 +209,637 @@ export function Sessions() {
 
   const [selectedVenue, setSelectedVenue] = useState<string>('all');
   const [selectedGroupKey, setSelectedGroupKey] = useState<string>('');
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<string[]>([]);
+  const [bulkSelectionMode, setBulkSelectionMode] = useState(false);
   const [search, setSearch] = useState('');
   const [showOnlyAlert, setShowOnlyAlert] = useState(false);
   const [attendanceFilter, setAttendanceFilter] = useState<'all' | 'present' | 'absent' | 'late'>('all');
+  const [sessionWindowStart, setSessionWindowStart] = useState(0);
+  const [gridWidth, setGridWidth] = useState(0);
+  const [editingSession, setEditingSession] = useState<SessionInstance | null>(null);
+  const [sessionDraft, setSessionDraft] = useState({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' as string });
+  const [recurrenceForm, setRecurrenceForm] = useState({
+    frequency: 'weekly',
+    start_date: '',
+    end_date: '',
+    skip_term_holidays: true,
+    skip_bank_holidays: true,
+  });
+  const [recurrencePreview, setRecurrencePreview] = useState<string[]>([]);
+  const [recurrenceSummary, setRecurrenceSummary] = useState<{
+    totalGenerated: number;
+    skippedBankHolidays: number;
+    skippedTermHolidays: number;
+    affectedDatesCount: number;
+  } | null>(null);
+  const [showRecurringConfirm, setShowRecurringConfirm] = useState(false);
+  const [showBulkRecurringDialog, setShowBulkRecurringDialog] = useState(false);
+  const [showSaveOccurrenceConfirm, setShowSaveOccurrenceConfirm] = useState(false);
+  const [showCancelOccurrenceConfirm, setShowCancelOccurrenceConfirm] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const node = gridRef.current;
+    if (!node) return;
+    const update = () => setGridWidth(node.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+
+  const visibleSessionCount = useMemo(() => {
+    if (!gridWidth) return 5;
+    const available = Math.max(320, gridWidth - 280);
+    return Math.min(6, Math.max(3, Math.floor(available / 92)));
+  }, [gridWidth]);
+
+  const filteredGroups = useMemo(() => {
+    if (selectedVenue === 'all') return groups;
+    return groups.filter(g => g.venue_id === selectedVenue);
+  }, [groups, selectedVenue]);
+
+  const selectedGroup = useMemo(() => {
+    return groups.find(g => g.key === selectedGroupKey) ?? filteredGroups[0] ?? null;
+  }, [groups, selectedGroupKey, filteredGroups]);
+
+  const selectedBulkGroups = useMemo(() => {
+    return groups.filter(g => selectedGroupKeys.includes(g.key));
+  }, [groups, selectedGroupKeys]);
+
+  const toggleBulkGroupSelection = (key: string) => {
+    setSelectedGroupKeys(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
+  };
+
+  const toggleBulkVenueSelection = (venueId: string) => {
+    const venueKeys = groups.filter(g => g.venue_id === venueId).map(g => g.key);
+    if (!venueKeys.length) return;
+    setSelectedGroupKeys(prev => {
+      const allSelected = venueKeys.every(key => prev.includes(key));
+      if (allSelected) return prev.filter(key => !venueKeys.includes(key));
+      return Array.from(new Set([...prev, ...venueKeys]));
+    });
+  };
+
+  const clearBulkSelection = () => setSelectedGroupKeys([]);
+
+  useEffect(() => {
+    if (!selectedGroup) return;
+    const maxStart = Math.max(0, selectedGroup.sessions.length - visibleSessionCount);
+    setSessionWindowStart(prev => Math.min(prev, maxStart));
+  }, [selectedGroup, visibleSessionCount]);
+
+  const visibleSessions = useMemo(() => {
+    if (!selectedGroup) return [];
+    const start = Math.min(sessionWindowStart, Math.max(0, selectedGroup.sessions.length - visibleSessionCount));
+    return selectedGroup.sessions.slice(start, start + visibleSessionCount);
+  }, [selectedGroup, sessionWindowStart, visibleSessionCount]);
+
+  const canShiftSessionWindowBackward = sessionWindowStart > 0;
+  const canShiftSessionWindowForward = selectedGroup ? sessionWindowStart + visibleSessionCount < selectedGroup.sessions.length : false;
+
+  const openSessionEditor = (sess: SessionInstance) => {
+    if (!selectedGroup) return;
+    setEditingSession(sess);
+    setSessionDraft({
+      name: sess.name,
+      venue_id: sess.venue_id || selectedGroup.venue_id,
+      start_at: sess.start_at.slice(0, 16),
+      end_at: sess.end_at.slice(0, 16),
+      status: sess.status,
+    });
+  };
+
+  const buildRecurrenceDates = () => {
+    if (!editingSession || !selectedGroup) return [] as string[];
+    const anchor = new Date(editingSession.start_at);
+    const targetWeekday = anchor.getDay();
+    const start = new Date(recurrenceForm.start_date || editingSession.start_at.slice(0, 10));
+    const end = new Date(recurrenceForm.end_date || editingSession.start_at.slice(0, 10));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [] as string[];
+
+    const out: string[] = [];
+    const base = new Date(start);
+    base.setHours(0, 0, 0, 0);
+
+    const addCandidate = (d: Date) => {
+      const iso = d.toISOString().slice(0, 10);
+      if (d < start || d > end) return;
+      const holiday = isDateInHolidays(iso, holidays);
+      const skipThisDate =
+        (recurrenceForm.skip_term_holidays && holiday && holiday.kind === 'term_break') ||
+        (recurrenceForm.skip_bank_holidays && holiday && holiday.kind === 'bank_holiday');
+      if (skipThisDate) return;
+      out.push(iso);
+    };
+
+    if (recurrenceForm.frequency === 'daily') {
+      const cursor = new Date(base);
+      while (cursor <= end) {
+        addCandidate(new Date(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return out;
+    }
+
+    if (recurrenceForm.frequency === 'weekly' || recurrenceForm.frequency === 'biweekly' || recurrenceForm.frequency === 'fortnightly') {
+      const step = recurrenceForm.frequency === 'weekly' ? 7 : 14;
+      const cursor = new Date(base);
+      while (cursor <= end) {
+        if (cursor.getDay() === targetWeekday) addCandidate(new Date(cursor));
+        cursor.setDate(cursor.getDate() + step);
+      }
+      return out;
+    }
+
+    if (recurrenceForm.frequency === 'monthly' || recurrenceForm.frequency === 'quarterly') {
+      const step = recurrenceForm.frequency === 'monthly' ? 1 : 3;
+      const cursor = new Date(base);
+      while (cursor <= end) {
+        const candidate = new Date(cursor.getFullYear(), cursor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
+        if (candidate.getDay() === targetWeekday && candidate >= base && candidate <= end) {
+          addCandidate(candidate);
+        }
+        cursor.setMonth(cursor.getMonth() + step);
+      }
+      return out;
+    }
+
+    return out;
+  };
+
+  const getRecurrencePreviewData = () => {
+    if (!editingSession || !selectedGroup) return { dates: [] as string[], summary: null as {
+      totalGenerated: number;
+      skippedBankHolidays: number;
+      skippedTermHolidays: number;
+      affectedDatesCount: number;
+    } | null };
+
+    const anchor = new Date(editingSession.start_at);
+    const targetWeekday = anchor.getDay();
+    const start = new Date(recurrenceForm.start_date || editingSession.start_at.slice(0, 10));
+    const end = new Date(recurrenceForm.end_date || editingSession.start_at.slice(0, 10));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+      return { dates: [], summary: null };
+    }
+
+    const base = new Date(start);
+    base.setHours(0, 0, 0, 0);
+    const candidates: string[] = [];
+
+    const pushCandidate = (d: Date) => {
+      const iso = d.toISOString().slice(0, 10);
+      if (d < start || d > end) return;
+      candidates.push(iso);
+    };
+
+    if (recurrenceForm.frequency === 'daily') {
+      const cursor = new Date(base);
+      while (cursor <= end) {
+        pushCandidate(new Date(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    } else if (recurrenceForm.frequency === 'weekly' || recurrenceForm.frequency === 'biweekly' || recurrenceForm.frequency === 'fortnightly') {
+      const step = recurrenceForm.frequency === 'weekly' ? 7 : 14;
+      const cursor = new Date(base);
+      while (cursor <= end) {
+        if (cursor.getDay() === targetWeekday) pushCandidate(new Date(cursor));
+        cursor.setDate(cursor.getDate() + step);
+      }
+    } else if (recurrenceForm.frequency === 'monthly' || recurrenceForm.frequency === 'quarterly') {
+      const step = recurrenceForm.frequency === 'monthly' ? 1 : 3;
+      const cursor = new Date(base);
+      while (cursor <= end) {
+        const candidate = new Date(cursor.getFullYear(), cursor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
+        if (candidate.getDay() === targetWeekday && candidate >= base && candidate <= end) {
+          pushCandidate(candidate);
+        }
+        cursor.setMonth(cursor.getMonth() + step);
+      }
+    }
+
+    const dates = candidates.filter(date => {
+      const holiday = isDateInHolidays(date, holidays);
+      const skipThisDate =
+        (recurrenceForm.skip_term_holidays && holiday && holiday.kind === 'term_break') ||
+        (recurrenceForm.skip_bank_holidays && holiday && holiday.kind === 'bank_holiday');
+      return !skipThisDate;
+    });
+
+    const skippedBankHolidays = candidates.filter(date => {
+      const holiday = isDateInHolidays(date, holidays);
+      return recurrenceForm.skip_bank_holidays && !!holiday && holiday.kind === 'bank_holiday';
+    }).length;
+
+    const skippedTermHolidays = candidates.filter(date => {
+      const holiday = isDateInHolidays(date, holidays);
+      return recurrenceForm.skip_term_holidays && !!holiday && holiday.kind === 'term_break';
+    }).length;
+
+    const affectedDatesCount = selectedGroup.sessions.filter(s => dates.includes(s.start_at.slice(0, 10))).length;
+
+    return {
+      dates,
+      summary: {
+        totalGenerated: dates.length,
+        skippedBankHolidays,
+        skippedTermHolidays,
+        affectedDatesCount,
+      },
+    };
+  };
+
+  const previewRecurrenceDates = () => {
+    const plan = getRecurrencePreviewData();
+    setRecurrencePreview(plan.dates);
+    setRecurrenceSummary(plan.summary);
+    return plan.dates;
+  };
+
+  const previewBulkRecurringPattern = () => {
+    const baseGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedGroup ? [selectedGroup] : []);
+    if (!baseGroups.length) {
+      setRecurrencePreview([]);
+      setRecurrenceSummary(null);
+      return [] as string[];
+    }
+
+    const generated = new Set<string>();
+    let skippedBankHolidays = 0;
+    let skippedTermHolidays = 0;
+
+    baseGroups.forEach(group => {
+      const anchor = group.sessions[0];
+      if (!anchor) return;
+      const start = new Date(recurrenceForm.start_date || anchor.start_at.slice(0, 10));
+      const end = new Date(recurrenceForm.end_date || anchor.start_at.slice(0, 10));
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return;
+      const targetWeekday = new Date(anchor.start_at).getDay();
+      const base = new Date(start);
+      base.setHours(0, 0, 0, 0);
+
+      const candidateDates: string[] = [];
+      const addCandidate = (d: Date) => {
+        const iso = d.toISOString().slice(0, 10);
+        if (d < start || d > end) return;
+        candidateDates.push(iso);
+      };
+
+      if (recurrenceForm.frequency === 'daily') {
+        const cursor = new Date(base);
+        while (cursor <= end) {
+          addCandidate(new Date(cursor));
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      } else if (['weekly', 'biweekly', 'fortnightly'].includes(recurrenceForm.frequency)) {
+        const step = recurrenceForm.frequency === 'weekly' ? 7 : 14;
+        const cursor = new Date(base);
+        while (cursor <= end) {
+          if (cursor.getDay() === targetWeekday) addCandidate(new Date(cursor));
+          cursor.setDate(cursor.getDate() + step);
+        }
+      } else if (['monthly', 'quarterly'].includes(recurrenceForm.frequency)) {
+        const step = recurrenceForm.frequency === 'monthly' ? 1 : 3;
+        const cursor = new Date(base);
+        while (cursor <= end) {
+          const candidate = new Date(cursor.getFullYear(), cursor.getMonth(), new Date(anchor.start_at).getDate(), 0, 0, 0, 0);
+          if (candidate.getDay() === targetWeekday && candidate >= base && candidate <= end) addCandidate(candidate);
+          cursor.setMonth(cursor.getMonth() + step);
+        }
+      }
+
+      candidateDates.forEach(date => {
+        const holiday = isDateInHolidays(date, holidays);
+        const shouldSkip =
+          (recurrenceForm.skip_term_holidays && holiday && holiday.kind === 'term_break') ||
+          (recurrenceForm.skip_bank_holidays && holiday && holiday.kind === 'bank_holiday');
+        if (shouldSkip) {
+          if (holiday && holiday.kind === 'term_break') skippedTermHolidays += 1;
+          if (holiday && holiday.kind === 'bank_holiday') skippedBankHolidays += 1;
+          return;
+        }
+        generated.add(date);
+      });
+    });
+
+    const dates = Array.from(generated).sort();
+    setRecurrencePreview(dates);
+    setRecurrenceSummary({
+      totalGenerated: dates.length,
+      skippedBankHolidays,
+      skippedTermHolidays,
+      affectedDatesCount: dates.length,
+    });
+    return dates;
+  };
+
+  const clearRecurrencePreview = () => {
+    setRecurrencePreview([]);
+    setRecurrenceSummary(null);
+  };
+
+  const saveSessionEdit = async () => {
+    if (!editingSession) return;
+    const startAt = new Date(sessionDraft.start_at);
+    const endAt = new Date(sessionDraft.end_at);
+    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+      alert('Choose a valid end time after the start time.');
+      return;
+    }
+
+    setShowSaveOccurrenceConfirm(true);
+  };
+
+  const confirmSaveSessionEdit = async () => {
+    if (!editingSession) return;
+    const startAt = new Date(sessionDraft.start_at);
+    const endAt = new Date(sessionDraft.end_at);
+    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+      alert('Choose a valid end time after the start time.');
+      return;
+    }
+
+    const update = {
+      name: sessionDraft.name.trim() || editingSession.name,
+      venue_id: sessionDraft.venue_id || editingSession.venue_id,
+      start_at: new Date(startAt).toISOString(),
+      end_at: new Date(endAt).toISOString(),
+      status: sessionDraft.status,
+    };
+
+    if (!demoEnabled && staff) {
+      const overridePayload = {
+        organization_id: staff.organization_id,
+        session_id: editingSession.id,
+        schedule_id: editingSession.schedule_id ?? null,
+        starts_at: editingSession.start_at,
+        ends_at: editingSession.end_at,
+        venue_id: editingSession.venue_id ?? null,
+        original_values: {
+          name: editingSession.name,
+          venue_id: editingSession.venue_id,
+          start_at: editingSession.start_at,
+          end_at: editingSession.end_at,
+          status: editingSession.status,
+        },
+        override_values: {
+          name: update.name,
+          venue_id: update.venue_id,
+          start_at: update.start_at,
+          end_at: update.end_at,
+          status: update.status,
+        },
+        created_by: staff.user_id,
+      };
+      const { error } = await supabase.from('mentis_schedule_overrides').insert(overridePayload);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    setGroups(prev => prev.map(g => g.key === selectedGroup?.key ? {
+      ...g,
+      sessions: g.sessions.map(s => s.id === editingSession.id ? { ...s, ...update } : s),
+    } : g));
+    setShowSaveOccurrenceConfirm(false);
+    setEditingSession(null);
+  };
+
+  const resetSessionToRecurringPattern = async () => {
+    if (!selectedGroup || !editingSession) return;
+    const base = selectedGroup.sessions.find(s => s.schedule_id === editingSession.schedule_id && s.id !== editingSession.id) ?? selectedGroup.sessions[0];
+    if (!base) return;
+
+    const reset = {
+      name: base.name,
+      venue_id: base.venue_id,
+      start_at: base.start_at,
+      end_at: base.end_at,
+      status: base.status,
+    };
+
+    if (!demoEnabled && staff) {
+      const { error } = await supabase.from('mentis_schedule_overrides').delete().eq('session_id', editingSession.id);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    setGroups(prev => prev.map(g => g.key === selectedGroup.key ? {
+      ...g,
+      sessions: g.sessions.map(s => s.id === editingSession.id ? { ...s, ...reset } : s),
+    } : g));
+
+    setSessionDraft({
+      name: reset.name,
+      venue_id: reset.venue_id,
+      start_at: reset.start_at.slice(0, 16),
+      end_at: reset.end_at.slice(0, 16),
+      status: reset.status,
+    });
+    setEditingSession(null);
+  };
+
+  const cancelThisDateOnly = async () => {
+    if (!editingSession) return;
+    setShowCancelOccurrenceConfirm(true);
+  };
+
+  const confirmCancelThisDateOnly = async () => {
+    if (!editingSession) return;
+    const cancelled = {
+      name: editingSession.name,
+      venue_id: editingSession.venue_id,
+      start_at: editingSession.start_at,
+      end_at: editingSession.end_at,
+      status: 'cancelled',
+    };
+
+    if (!demoEnabled && staff) {
+      const overridePayload = {
+        organization_id: staff.organization_id,
+        session_id: editingSession.id,
+        schedule_id: editingSession.schedule_id ?? null,
+        starts_at: editingSession.start_at,
+        ends_at: editingSession.end_at,
+        venue_id: editingSession.venue_id ?? null,
+        original_values: {
+          name: editingSession.name,
+          venue_id: editingSession.venue_id,
+          start_at: editingSession.start_at,
+          end_at: editingSession.end_at,
+          status: editingSession.status,
+        },
+        override_values: {
+          name: cancelled.name,
+          venue_id: cancelled.venue_id,
+          start_at: cancelled.start_at,
+          end_at: cancelled.end_at,
+          status: 'cancelled',
+        },
+        created_by: staff.user_id,
+      };
+      const { error } = await supabase.from('mentis_schedule_overrides').insert(overridePayload);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    setGroups(prev => prev.map(g => g.key === selectedGroup?.key ? {
+      ...g,
+      sessions: g.sessions.map(s => s.id === editingSession.id ? { ...s, ...cancelled } : s),
+    } : g));
+    setShowCancelOccurrenceConfirm(false);
+    setEditingSession(null);
+    setSessionDraft({ ...sessionDraft, status: 'cancelled' });
+  };
+
+  const applyRecurringSeries = async () => {
+    if (!selectedGroup || !editingSession) return;
+    const previewDates = recurrencePreview.length ? recurrencePreview : previewRecurrenceDates();
+    const summary = recurrenceSummary ?? getRecurrencePreviewData().summary;
+    if (!previewDates.length || !summary) {
+      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
+      return;
+    }
+    setShowRecurringConfirm(true);
+  };
+
+  const applyBulkRecurringPattern = async () => {
+    const targetGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedGroup ? [selectedGroup] : []);
+    if (!targetGroups.length) {
+      alert('Select at least one session group to apply a common recurring pattern.');
+      return;
+    }
+
+    const previewDates = recurrencePreview.length ? recurrencePreview : previewBulkRecurringPattern();
+    if (!previewDates.length) {
+      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
+      return;
+    }
+
+    const summary = recurrenceSummary ?? { totalGenerated: previewDates.length, skippedBankHolidays: 0, skippedTermHolidays: 0, affectedDatesCount: previewDates.length };
+    const confirmText = [
+      `Apply this recurring pattern to ${targetGroups.length} selected session groups?`,
+      `Generated dates: ${summary.totalGenerated}`,
+      `Skipped bank holidays: ${summary.skippedBankHolidays}`,
+      `Skipped term breaks: ${summary.skippedTermHolidays}`,
+    ].join('\n');
+
+    if (!window.confirm(confirmText)) return;
+
+    const updates: Array<{ groupKey: string; sessionId: string; values: Partial<SessionInstance> }> = [];
+    targetGroups.forEach(group => {
+      group.sessions.forEach(s => {
+        if (!previewDates.includes(s.start_at.slice(0, 10))) return;
+        const startAt = new Date(`${s.start_at.slice(0, 10)}T${sessionDraft.start_at.slice(11, 16)}:00`);
+        const endAt = new Date(`${s.start_at.slice(0, 10)}T${sessionDraft.end_at.slice(11, 16)}:00`);
+        updates.push({
+          groupKey: group.key,
+          sessionId: s.id,
+          values: {
+            name: sessionDraft.name.trim() || s.name,
+            venue_id: sessionDraft.venue_id || s.venue_id,
+            start_at: startAt.toISOString(),
+            end_at: endAt.toISOString(),
+            status: sessionDraft.status,
+          },
+        });
+      });
+    });
+
+    if (!updates.length) {
+      alert('No matching session dates were found in the selected groups for this recurrence range.');
+      return;
+    }
+
+    setGroups(prev => prev.map(g => {
+      const matches = updates.filter(u => u.groupKey === g.key);
+      if (!matches.length) return g;
+      return {
+        ...g,
+        sessions: g.sessions.map(s => {
+          const match = matches.find(u => u.sessionId === s.id);
+          return match ? { ...s, ...match.values } : s;
+        }),
+      };
+    }));
+
+    clearRecurrencePreview();
+    setShowBulkRecurringDialog(false);
+    clearBulkSelection();
+  };
+
+  const confirmRecurringSeries = async () => {
+    if (!selectedGroup || !editingSession) return;
+    const previewDates = recurrencePreview.length ? recurrencePreview : previewRecurrenceDates();
+    const summary = recurrenceSummary ?? getRecurrencePreviewData().summary;
+    if (!previewDates.length || !summary) {
+      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
+      return;
+    }
+
+    const updates = selectedGroup.sessions.filter(s => previewDates.includes(s.start_at.slice(0, 10))).map(s => ({
+      sessionId: s.id,
+      values: {
+        name: sessionDraft.name || s.name,
+        venue_id: sessionDraft.venue_id || s.venue_id,
+        start_at: new Date(`${s.start_at.slice(0, 10)}T${sessionDraft.start_at.slice(11, 16)}:00`).toISOString(),
+        end_at: new Date(`${s.start_at.slice(0, 10)}T${sessionDraft.end_at.slice(11, 16)}:00`).toISOString(),
+        status: sessionDraft.status,
+      },
+    }));
+
+    if (!demoEnabled && staff) {
+      const overridePayload = {
+        organization_id: staff.organization_id,
+        schedule_id: editingSession.schedule_id ?? selectedGroup.schedule_id ?? null,
+        session_id: null,
+        starts_at: new Date(recurrenceForm.start_date || editingSession.start_at.slice(0, 10)).toISOString(),
+        ends_at: new Date(recurrenceForm.end_date || editingSession.start_at.slice(0, 10)).toISOString(),
+        venue_id: sessionDraft.venue_id || selectedGroup.venue_id || null,
+        original_values: {
+          name: editingSession.name,
+          venue_id: editingSession.venue_id,
+          status: editingSession.status,
+          dates: previewDates,
+        },
+        override_values: {
+          frequency: recurrenceForm.frequency,
+          name: sessionDraft.name || editingSession.name,
+          venue_id: sessionDraft.venue_id || selectedGroup.venue_id || null,
+          start_at: sessionDraft.start_at,
+          end_at: sessionDraft.end_at,
+          status: sessionDraft.status,
+          dates: previewDates,
+          skip_term_holidays: recurrenceForm.skip_term_holidays,
+          skip_bank_holidays: recurrenceForm.skip_bank_holidays,
+        },
+        created_by: staff.user_id,
+      };
+      const { error } = await supabase.from('mentis_schedule_overrides').insert(overridePayload);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    setGroups(prev => prev.map(g => g.key === selectedGroup.key ? {
+      ...g,
+      sessions: g.sessions.map(s => {
+        const match = updates.find(u => u.sessionId === s.id);
+        return match ? { ...s, ...match.values } : s;
+      }),
+    } : g));
+    clearRecurrencePreview();
+    setShowRecurringConfirm(false);
+    setEditingSession(null);
+  };
 
   // Load data
   useEffect(() => {
@@ -309,15 +939,6 @@ export function Sessions() {
   }, [staff]);
 
   // Derived
-  const filteredGroups = useMemo(() => {
-    if (selectedVenue === 'all') return groups;
-    return groups.filter(g => g.venue_id === selectedVenue);
-  }, [groups, selectedVenue]);
-
-  const selectedGroup = useMemo(() => {
-    return groups.find(g => g.key === selectedGroupKey) ?? filteredGroups[0] ?? null;
-  }, [groups, selectedGroupKey, filteredGroups]);
-
   // Keep selected group valid when venue changes
   useEffect(() => {
     if (!filteredGroups.length) return;
@@ -457,23 +1078,41 @@ export function Sessions() {
           {venues.map(v => {
             const count = groups.filter(g => g.venue_id === v.id).length;
             const active = selectedVenue === v.id;
+            const venueSelectedCount = groups.filter(g => g.venue_id === v.id && selectedGroupKeys.includes(g.key)).length;
             return (
-              <button
-                key={v.id}
-                onClick={() => setSelectedVenue(v.id)}
-                className={cn(
-                  'group relative flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all',
-                  active
-                    ? 'bg-surface-raised border-brand text-brand-text shadow-sm'
-                    : 'bg-surface-inset border-line text-ink-muted hover:border-[var(--border-strong)] hover:text-ink'
+              <div key={v.id} className="flex items-center gap-2">
+                {bulkSelectionMode && (
+                  <button
+                    type="button"
+                    aria-label={`Toggle all sessions for ${v.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleBulkVenueSelection(v.id);
+                    }}
+                    className={cn(
+                      'grid size-4 place-items-center rounded-sm border text-[10px] font-bold transition-all',
+                      venueSelectedCount > 0 ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-surface text-ink-faint hover:text-ink'
+                    )}
+                  >
+                    {venueSelectedCount > 0 ? '✓' : ''}
+                  </button>
                 )}
-              >
-                <MapPin className="size-3.5" />
-                {v.name}
-                <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] tabular-nums', active ? 'bg-brand-soft' : 'bg-surface-hover')}>
-                  {count}
-                </span>
-              </button>
+                <button
+                  onClick={() => setSelectedVenue(v.id)}
+                  className={cn(
+                    'group relative flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all',
+                    active
+                      ? 'bg-surface-raised border-brand text-brand-text shadow-sm'
+                      : 'bg-surface-inset border-line text-ink-muted hover:border-[var(--border-strong)] hover:text-ink'
+                  )}
+                >
+                  <MapPin className="size-3.5" />
+                  {v.name}
+                  <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] tabular-nums', active ? 'bg-brand-soft' : 'bg-surface-hover')}>
+                    {count}
+                  </span>
+                </button>
+              </div>
             );
           })}
         </div>
@@ -481,6 +1120,24 @@ export function Sessions() {
 
       {/* Session Sheet Tabs - Second level, spreadsheet-like */}
       <div className="card p-0 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface-inset/50 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBulkSelectionMode(v => !v)}>
+              {bulkSelectionMode ? 'Exit multi-select' : 'Multi-select sessions'}
+            </button>
+            {bulkSelectionMode && (
+              <>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedGroupKeys(filteredGroups.map(g => g.key))}>Select all visible</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={clearBulkSelection}>Clear</button>
+              </>
+            )}
+          </div>
+          {selectedBulkGroups.length > 0 && (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowBulkRecurringDialog(true)}>
+              Apply common recurring pattern ({selectedBulkGroups.length})
+            </button>
+          )}
+        </div>
         <div className="flex items-center justify-between border-b border-line bg-surface-inset/50 px-3 py-2">
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 text-ink-faint">
@@ -516,16 +1173,34 @@ export function Sessions() {
               return (
                 <button
                   key={g.key}
-                  onClick={() => setSelectedGroupKey(g.key)}
+                  onClick={() => {
+                    if (bulkSelectionMode) {
+                      toggleBulkGroupSelection(g.key);
+                      return;
+                    }
+                    setSelectedGroupKey(g.key);
+                  }}
                   className={cn(
                     'relative flex shrink-0 items-center gap-2 border-x border-t px-3.5 py-2 text-xs font-semibold transition-all',
                     'first:rounded-tl-md last:rounded-tr-md -mb-px',
                     active
                       ? 'z-10 bg-surface border-line border-b-surface text-ink shadow-[0_-2px_0_var(--brand)]'
-                      : 'bg-surface-inset/70 border-transparent text-ink-muted hover:bg-surface-hover hover:text-ink'
+                      : 'bg-surface-inset/70 border-transparent text-ink-muted hover:bg-surface-hover hover:text-ink',
+                    bulkSelectionMode && selectedGroupKeys.includes(g.key) && 'ring-2 ring-brand-soft'
                   )}
                   style={active ? { borderBottomColor: 'var(--surface)' } : undefined}
                 >
+                  {bulkSelectionMode && (
+                    <span className="inline-flex items-center justify-center rounded-sm border border-line bg-surface p-0.5">
+                      <input
+                        type="checkbox"
+                        checked={selectedGroupKeys.includes(g.key)}
+                        onChange={() => toggleBulkGroupSelection(g.key)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="h-3.5 w-3.5 accent-brand"
+                      />
+                    </span>
+                  )}
                   <span className="max-w-[14ch] truncate">{g.name}</span>
                   <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-medium text-ink-faint">
                     <Clock className="size-3" />
@@ -625,164 +1300,201 @@ export function Sessions() {
             </div>
 
             {/* The Grid */}
-            <div className="relative overflow-auto" style={{ maxHeight: '62vh' }}>
-              <table className="w-full border-collapse text-xs" style={{ minWidth: 900 }}>
-                <thead className="sticky top-0 z-20 bg-surface">
-                  <tr>
-                    <th className="sticky left-0 z-30 w-[200px] border-b border-r border-line bg-surface p-2 text-left">
-                      <div className="flex items-center gap-2">
-                        <Users className="size-3.5 text-ink-faint" />
-                        <span className="text-[11px] font-bold uppercase tracking-wide">Members</span>
-                        <span className="ml-auto rounded-full bg-surface-inset px-1.5 py-0.5 text-[10px] tabular-nums">{groupMembers.length}</span>
-                      </div>
-                    </th>
-                    {selectedGroup.sessions.map(sess => {
-                      const dateStr = sess.start_at.slice(0, 10);
-                      const hol = isDateInHolidays(dateStr, holidays);
-                      const isWeekend = new Date(sess.start_at).getDay() === 0 || new Date(sess.start_at).getDay() === 6;
-                      return (
-                        <th
-                          key={sess.id}
-                          className={cn(
-                            'min-w-[72px] border-b border-r border-line p-1 text-center align-bottom',
-                            hol
-                              ? 'bg-danger text-white'
-                              : isWeekend
-                              ? 'bg-surface-inset'
-                              : 'bg-surface',
-                            hol && 'relative overflow-hidden'
-                          )}
-                          title={hol ? `${hol.name} (${hol.kind}) — No session` : `${dateStr} ${new Date(sess.start_at).toLocaleTimeString()}`}
-                        >
-                          {hol && (
-                            <>
-                              <div className="pointer-events-none absolute inset-0 opacity-20" style={{
-                                backgroundImage: `repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.5) 4px, rgba(255,255,255,0.5) 8px)`
-                              }} />
-                              <div className="relative">
-                                <div className="text-[9px] font-bold uppercase leading-none">HOL</div>
-                                <div className="text-[10px] font-bold leading-tight truncate max-w-[64px]">{hol.name.slice(0, 12)}</div>
-                                <div className="text-[9px] opacity-90">{formatDateShort(sess.start_at)}</div>
-                              </div>
-                            </>
-                          )}
-                          {!hol && (
-                            <div className="flex flex-col items-center gap-0.5 py-1">
-                              <span className={cn('text-[10px] font-medium', isWeekend ? 'text-ink-faint' : 'text-ink-muted')}>{formatDay(sess.start_at)}</span>
-                              <span className="text-[11px] font-bold tabular-nums">{formatDateShort(sess.start_at)}</span>
-                              <span className="text-[9px] text-ink-faint tabular-nums">{new Date(sess.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                              {/* present count */}
-                              <span className="mt-1 rounded-full bg-surface-inset px-1 py-0 text-[9px] tabular-nums">
-                                {attendance.filter(a => a.session_id === sess.id && a.status === 'present').length}/{selectedGroup.memberIds.length}
-                              </span>
-                            </div>
-                          )}
-                        </th>
-                      );
-                    })}
-                    <th className="sticky right-0 z-20 w-[68px] border-b border-l border-line bg-surface p-1 text-center text-[10px] font-bold uppercase">%</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groupMembers.map((m, idx) => {
-                    const memberAttendances = selectedGroup.sessions.map(s => attendanceMap.get(`${m.id}|${s.id}`) ?? 'absent');
-                    const presentCount = memberAttendances.filter(s => s === 'present').length;
-                    const totalValid = selectedGroup.sessions.filter(s => !isDateInHolidays(s.start_at.slice(0, 10), holidays)).length;
-                    const pctVal = totalValid ? Math.round((presentCount / totalValid) * 100) : 0;
-                    const filteredOutByAttendance = attendanceFilter === 'absent' && !memberAttendances.includes('absent');
-                    if (filteredOutByAttendance) return null;
-                    return (
-                      <tr key={m.id} className={cn('group/row', idx % 2 === 0 ? 'bg-surface' : 'bg-surface-hover/30')}>
-                        <td className="sticky left-0 z-10 border-b border-r border-line bg-inherit p-2">
-                          <div className="flex items-center gap-2">
-                            <div className="grid size-6 place-items-center rounded-full bg-brand-soft text-[10px] font-bold text-brand-text">
-                              {m.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
-                            </div>
-                            <div className="min-w-0 leading-tight">
-                              <div className="flex items-center gap-1 truncate text-xs font-semibold">
-                                <span className="truncate">{m.name}</span>
-                                {m.alert && <span className="text-[11px]" title="Medical alert">⚠️</span>}
-                              </div>
-                              <div className="text-[10px] text-ink-faint truncate">{m.customer ?? 'Member'}</div>
-                            </div>
-                            <Link to={`/members/${m.id}`} className="ml-auto hidden group-hover/row:grid size-5 place-items-center rounded-sm bg-surface-inset text-ink-faint hover:text-ink">
-                              <MoreHorizontal className="size-3" />
-                            </Link>
-                          </div>
-                        </td>
-                        {selectedGroup.sessions.map(sess => {
-                          const dateStr = sess.start_at.slice(0, 10);
-                          const hol = isDateInHolidays(dateStr, holidays);
-                          const status = attendanceMap.get(`${m.id}|${sess.id}`) ?? 'absent';
-                          if (hol) {
-                            return (
-                              <td key={sess.id} className="border-b border-r border-line bg-danger-soft/60 p-0 text-center">
-                                <div className="grid h-9 place-items-center text-[10px] font-bold text-danger/60">
-                                  <Ban className="size-3" />
+            <div ref={gridRef} className="relative overflow-hidden">
+              <div className="flex items-center justify-between gap-2 border-b border-line bg-surface-inset/40 px-3 py-2 text-[11px]">
+                <div className="flex items-center gap-2 text-ink-faint">
+                  <span className="font-semibold uppercase tracking-wide">Dates</span>
+                  <span>{Math.min(visibleSessions.length, selectedGroup.sessions.length)} of {selectedGroup.sessions.length} visible</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setSessionWindowStart(v => Math.max(0, v - 1))}
+                    disabled={!canShiftSessionWindowBackward}
+                    className="grid size-7 place-items-center rounded-sm border border-line bg-surface text-ink-faint disabled:cursor-not-allowed disabled:opacity-40 hover:text-ink"
+                    aria-label="Previous date range"
+                  >
+                    <ChevronLeft className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSessionWindowStart(v => Math.min(selectedGroup.sessions.length - visibleSessionCount, v + 1))}
+                    disabled={!canShiftSessionWindowForward}
+                    className="grid size-7 place-items-center rounded-sm border border-line bg-surface text-ink-faint disabled:cursor-not-allowed disabled:opacity-40 hover:text-ink"
+                    aria-label="Next date range"
+                  >
+                    <ChevronRight className="size-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="relative overflow-auto" style={{ maxHeight: '62vh' }}>
+                <table className="w-full border-collapse text-xs" style={{ minWidth: 900 }}>
+                  <thead className="sticky top-0 z-20 bg-surface">
+                    <tr>
+                      <th className="sticky left-0 z-30 w-[200px] border-b border-r border-line bg-surface p-2 text-left">
+                        <div className="flex items-center gap-2">
+                          <Users className="size-3.5 text-ink-faint" />
+                          <span className="text-[11px] font-bold uppercase tracking-wide">Members</span>
+                          <span className="ml-auto rounded-full bg-surface-inset px-1.5 py-0.5 text-[10px] tabular-nums">{groupMembers.length}</span>
+                        </div>
+                      </th>
+                      {visibleSessions.map(sess => {
+                        const dateStr = sess.start_at.slice(0, 10);
+                        const hol = isDateInHolidays(dateStr, holidays);
+                        const isWeekend = new Date(sess.start_at).getDay() === 0 || new Date(sess.start_at).getDay() === 6;
+                        return (
+                          <th
+                            key={sess.id}
+                            className={cn(
+                              'min-w-[72px] border-b border-r border-line p-1 text-center align-bottom',
+                              hol
+                                ? 'bg-danger text-white'
+                                : isWeekend
+                                ? 'bg-surface-inset'
+                                : 'bg-surface',
+                              hol && 'relative overflow-hidden'
+                            )}
+                            title={hol ? `${hol.name} (${hol.kind}) — No session` : `${dateStr} ${new Date(sess.start_at).toLocaleTimeString()}`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openSessionEditor(sess)}
+                              className="w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]"
+                              aria-label={`Edit this session: ${sess.name} on ${dateStr}`}
+                            >
+                              {hol && (
+                                <>
+                                  <div className="pointer-events-none absolute inset-0 opacity-20" style={{
+                                    backgroundImage: `repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.5) 4px, rgba(255,255,255,0.5) 8px)`
+                                  }} />
+                                  <div className="relative">
+                                    <div className="text-[9px] font-bold uppercase leading-none">HOL</div>
+                                    <div className="text-[10px] font-bold leading-tight truncate max-w-[64px]">{hol.name.slice(0, 12)}</div>
+                                    <div className="text-[9px] opacity-90">{formatDateShort(sess.start_at)}</div>
+                                  </div>
+                                </>
+                              )}
+                              {!hol && (
+                                <div className="relative flex flex-col items-center gap-0.5 py-1 text-center">
+                                  <span className="absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded-sm bg-surface/80 text-[9px] text-ink-faint hover:text-ink">
+                                    <Pencil className="size-3" />
+                                  </span>
+                                  <span className={cn('text-[10px] font-medium', isWeekend ? 'text-ink-faint' : 'text-ink-muted')}>{formatDay(sess.start_at)}</span>
+                                  <span className="text-[11px] font-bold tabular-nums">{formatDateShort(sess.start_at)}</span>
+                                  <span className="text-[9px] text-ink-faint tabular-nums">{new Date(sess.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                  <span className="mt-1 rounded-full bg-surface-inset px-1 py-0 text-[9px] tabular-nums">
+                                    {attendance.filter(a => a.session_id === sess.id && a.status === 'present').length}/{selectedGroup.memberIds.length}
+                                  </span>
                                 </div>
+                              )}
+                            </button>
+                          </th>
+                        );
+                      })}
+                      <th className="sticky right-0 z-20 w-[68px] border-b border-l border-line bg-surface p-1 text-center text-[10px] font-bold uppercase">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupMembers.map((m, idx) => {
+                      const memberAttendances = visibleSessions.map(s => attendanceMap.get(`${m.id}|${s.id}`) ?? 'absent');
+                      const presentCount = memberAttendances.filter(s => s === 'present').length;
+                      const totalValid = visibleSessions.filter(s => !isDateInHolidays(s.start_at.slice(0, 10), holidays)).length;
+                      const pctVal = totalValid ? Math.round((presentCount / totalValid) * 100) : 0;
+                      const filteredOutByAttendance = attendanceFilter === 'absent' && !memberAttendances.includes('absent');
+                      if (filteredOutByAttendance) return null;
+                      return (
+                        <tr key={m.id} className={cn('group/row', idx % 2 === 0 ? 'bg-surface' : 'bg-surface-hover/30')}>
+                          <td className="sticky left-0 z-10 border-b border-r border-line bg-inherit p-2">
+                            <div className="flex items-center gap-2">
+                              <div className="grid size-6 place-items-center rounded-full bg-brand-soft text-[10px] font-bold text-brand-text">
+                                {m.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                              </div>
+                              <div className="min-w-0 leading-tight">
+                                <div className="flex items-center gap-1 truncate text-xs font-semibold">
+                                  <span className="truncate">{m.name}</span>
+                                  {m.alert && <span className="text-[11px]" title="Medical alert">⚠️</span>}
+                                </div>
+                                <div className="text-[10px] text-ink-faint truncate">{m.customer ?? 'Member'}</div>
+                              </div>
+                              <Link to={`/members/${m.id}`} className="ml-auto hidden group-hover/row:grid size-5 place-items-center rounded-sm bg-surface-inset text-ink-faint hover:text-ink">
+                                <MoreHorizontal className="size-3" />
+                              </Link>
+                            </div>
+                          </td>
+                          {visibleSessions.map(sess => {
+                            const dateStr = sess.start_at.slice(0, 10);
+                            const hol = isDateInHolidays(dateStr, holidays);
+                            const status = attendanceMap.get(`${m.id}|${sess.id}`) ?? 'absent';
+                            if (hol) {
+                              return (
+                                <td key={sess.id} className="border-b border-r border-line bg-danger-soft/60 p-0 text-center">
+                                  <div className="grid h-9 place-items-center text-[10px] font-bold text-danger/60">
+                                    <Ban className="size-3" />
+                                  </div>
+                                </td>
+                              );
+                            }
+                            return (
+                              <td key={sess.id} className="border-b border-r border-line p-0">
+                                <button
+                                  onClick={() => cycleAttendance(m.id, sess.id)}
+                                  className={cn(
+                                    'grid h-9 w-full place-items-center transition-all hover:scale-105 hover:z-10 hover:shadow-sm',
+                                    status === 'present' && 'bg-success-soft text-success hover:bg-success/20',
+                                    status === 'absent' && 'bg-transparent text-ink-faint hover:bg-surface-hover',
+                                    status === 'late' && 'bg-warning-soft text-warning hover:bg-warning/20',
+                                    status === 'taster' && 'bg-info-soft text-info'
+                                  )}
+                                  title={`${m.name} — ${dateStr}: ${status} (click to cycle)`}
+                                >
+                                  {status === 'present' && <Check className="size-4" />}
+                                  {status === 'absent' && <X className="size-3 opacity-40" />}
+                                  {status === 'late' && <Clock className="size-3.5" />}
+                                  {status === 'taster' && <span className="text-[10px] font-bold">T</span>}
+                                </button>
                               </td>
                             );
-                          }
-                          return (
-                            <td key={sess.id} className="border-b border-r border-line p-0">
-                              <button
-                                onClick={() => cycleAttendance(m.id, sess.id)}
-                                className={cn(
-                                  'grid h-9 w-full place-items-center transition-all hover:scale-105 hover:z-10 hover:shadow-sm',
-                                  status === 'present' && 'bg-success-soft text-success hover:bg-success/20',
-                                  status === 'absent' && 'bg-transparent text-ink-faint hover:bg-surface-hover',
-                                  status === 'late' && 'bg-warning-soft text-warning hover:bg-warning/20',
-                                  status === 'taster' && 'bg-info-soft text-info'
-                                )}
-                                title={`${m.name} — ${dateStr}: ${status} (click to cycle)`}
-                              >
-                                {status === 'present' && <Check className="size-4" />}
-                                {status === 'absent' && <X className="size-3 opacity-40" />}
-                                {status === 'late' && <Clock className="size-3.5" />}
-                                {status === 'taster' && <span className="text-[10px] font-bold">T</span>}
-                              </button>
-                            </td>
-                          );
-                        })}
-                        <td className="sticky right-0 z-10 border-b border-l border-line bg-inherit p-1 text-center">
-                          <div className={cn(
-                            'mx-auto grid size-7 place-items-center rounded-full text-[10px] font-bold tabular-nums',
-                            pctVal >= 80 ? 'bg-success-soft text-success' : pctVal >= 50 ? 'bg-warning-soft text-warning' : 'bg-danger-soft text-danger'
-                          )}>
-                            {pctVal}%
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot className="sticky bottom-0 z-20 bg-surface-inset">
-                  <tr>
-                    <td className="sticky left-0 border-t border-r border-line bg-surface-inset p-2 text-[11px] font-bold">
-                      <div className="flex items-center gap-1">
-                        <CheckCheck className="size-3.5" />
-                        Totals
-                      </div>
-                    </td>
-                    {selectedGroup.sessions.map(sess => {
-                      const dateStr = sess.start_at.slice(0, 10);
-                      const hol = isDateInHolidays(dateStr, holidays);
-                      if (hol) {
-                        return <td key={sess.id} className="border-t border-r border-line bg-danger-soft/50" />;
-                      }
-                      const present = attendance.filter(a => a.session_id === sess.id && a.status === 'present').length;
-                      return (
-                        <td key={sess.id} className="border-t border-r border-line p-1 text-center text-[11px] font-bold tabular-nums">
-                          {present}
-                        </td>
+                          })}
+                          <td className="sticky right-0 z-10 border-b border-l border-line bg-inherit p-1 text-center">
+                            <div className={cn(
+                              'mx-auto grid size-7 place-items-center rounded-full text-[10px] font-bold tabular-nums',
+                              pctVal >= 80 ? 'bg-success-soft text-success' : pctVal >= 50 ? 'bg-warning-soft text-warning' : 'bg-danger-soft text-danger'
+                            )}>
+                              {pctVal}%
+                            </div>
+                          </td>
+                        </tr>
                       );
                     })}
-                    <td className="sticky right-0 border-t border-l border-line bg-surface-inset p-1 text-center text-[11px] font-bold">
-                      {stats.presentAvg}%
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </tbody>
+                  <tfoot className="sticky bottom-0 z-20 bg-surface-inset">
+                    <tr>
+                      <td className="sticky left-0 border-t border-r border-line bg-surface-inset p-2 text-[11px] font-bold">
+                        <div className="flex items-center gap-1">
+                          <CheckCheck className="size-3.5" />
+                          Totals
+                        </div>
+                      </td>
+                      {visibleSessions.map(sess => {
+                        const dateStr = sess.start_at.slice(0, 10);
+                        const hol = isDateInHolidays(dateStr, holidays);
+                        if (hol) {
+                          return <td key={sess.id} className="border-t border-r border-line bg-danger-soft/50" />;
+                        }
+                        const present = attendance.filter(a => a.session_id === sess.id && a.status === 'present').length;
+                        return (
+                          <td key={sess.id} className="border-t border-r border-line p-1 text-center text-[11px] font-bold tabular-nums">
+                            {present}
+                          </td>
+                        );
+                      })}
+                      <td className="sticky right-0 border-t border-l border-line bg-surface-inset p-1 text-center text-[11px] font-bold">
+                        {stats.presentAvg}%
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             </div>
 
             {/* Footer toolbar */}
@@ -823,6 +1535,310 @@ export function Sessions() {
         </div>
       )}
 
+      <ConfirmDialog
+        open={showRecurringConfirm}
+        onOpenChange={(open) => setShowRecurringConfirm(open)}
+        title="Apply recurring series?"
+        description="This update will modify the matching dates in this group and keep the original recurrence pattern intact unless you explicitly edit it again."
+        confirmLabel="Apply series"
+        destructive={false}
+        onConfirm={confirmRecurringSeries}
+      >
+        {recurrenceSummary && recurrencePreview.length > 0 && (
+          <ReviewAndConfirmBanner
+            title="Review and confirm"
+            description="This change will affect the generated dates below after holiday rules are applied."
+            count={recurrenceSummary.affectedDatesCount}
+            range={`${recurrenceForm.start_date || editingSession?.start_at.slice(0, 10) || '—'} → ${recurrenceForm.end_date || editingSession?.start_at.slice(0, 10) || '—'}`}
+            skipBankHolidays={recurrenceForm.skip_bank_holidays}
+            skipTermHolidays={recurrenceForm.skip_term_holidays}
+            tone={recurrenceSummary.affectedDatesCount >= 5 ? 'warning' : 'neutral'}
+          />
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={showSaveOccurrenceConfirm}
+        onOpenChange={(open) => setShowSaveOccurrenceConfirm(open)}
+        title="Save this occurrence?"
+        description="This will create a one-off override for this session instance without changing the recurring pattern."
+        confirmLabel="Save occurrence"
+        destructive={false}
+        onConfirm={confirmSaveSessionEdit}
+      >
+        {editingSession && (
+          <ReviewAndConfirmBanner
+            title="Review and confirm"
+            description="You are updating a single session date while leaving the underlying recurring schedule intact."
+            count={1}
+            range={`${new Date(sessionDraft.start_at).toLocaleDateString()} → ${new Date(sessionDraft.end_at).toLocaleDateString()}`}
+            tone="neutral"
+          />
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={showCancelOccurrenceConfirm}
+        onOpenChange={(open) => setShowCancelOccurrenceConfirm(open)}
+        title="Cancel this date only?"
+        description="This will keep the repeating series but cancel just the selected session instance."
+        confirmLabel="Cancel date"
+        destructive
+        onConfirm={confirmCancelThisDateOnly}
+      >
+        {editingSession && (
+          <ReviewAndConfirmBanner
+            title="Review and confirm"
+            description="Only the selected occurrence will be cancelled; the recurring pattern will remain unchanged."
+            count={1}
+            range={`${new Date(editingSession.start_at).toLocaleDateString()}`}
+            tone="warning"
+          />
+        )}
+      </ConfirmDialog>
+
+      <Dialog open={showBulkRecurringDialog} onOpenChange={(open) => setShowBulkRecurringDialog(open)}>
+        <DialogContent size="lg">
+          <DialogHeader>
+            <DialogTitle>Apply a common recurring pattern</DialogTitle>
+            <DialogDescription>
+              This applies the same recurrence settings across the selected groups from the chosen date range, respecting term and UK bank holiday exceptions.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-5">
+            <div className="rounded-xl border border-line bg-surface-inset/40 p-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block text-sm font-medium text-ink">
+                  Frequency
+                  <select className="input mt-1" value={recurrenceForm.frequency} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, frequency: e.target.value })}>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-weekly</option>
+                    <option value="fortnightly">Fortnightly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                  </select>
+                </label>
+                <div />
+                <label className="block text-sm font-medium text-ink">
+                  Start date
+                  <input type="date" className="input mt-1" value={recurrenceForm.start_date || ''} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, start_date: e.target.value })} />
+                </label>
+                <label className="block text-sm font-medium text-ink">
+                  End date
+                  <input type="date" className="input mt-1" value={recurrenceForm.end_date || ''} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, end_date: e.target.value })} />
+                </label>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input type="checkbox" checked={recurrenceForm.skip_term_holidays} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, skip_term_holidays: e.target.checked })} />
+                  Skip term breaks
+                </label>
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input type="checkbox" checked={recurrenceForm.skip_bank_holidays} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, skip_bank_holidays: e.target.checked })} />
+                  Skip UK bank holidays
+                </label>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button className="btn btn-ghost" onClick={previewBulkRecurringPattern}>Preview generated dates</button>
+                <button className="btn btn-primary" onClick={applyBulkRecurringPattern} disabled={!recurrencePreview.length}>Apply common pattern</button>
+              </div>
+              {recurrenceSummary && recurrencePreview.length > 0 && (
+                <div className="mt-3 rounded-lg border border-line bg-surface p-3">
+                  <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Preview summary</div>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Generated</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.totalGenerated}</div>
+                    </div>
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped bank holidays</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedBankHolidays}</div>
+                    </div>
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped term breaks</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedTermHolidays}</div>
+                    </div>
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Affected dates</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.affectedDatesCount}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {recurrencePreview.map(date => (
+                      <span key={date} className="rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-medium text-ink">{date}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <button className="btn btn-ghost" onClick={() => setShowBulkRecurringDialog(false)}>Close</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editingSession} onOpenChange={(open) => !open && setEditingSession(null)}>
+        <DialogContent size="lg">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <DialogTitle>Edit this session</DialogTitle>
+              <span className="rounded-full border border-amber-400 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-amber-700">
+                Single occurrence only
+              </span>
+            </div>
+            <DialogDescription>Applies only to this one date. Use the recurring tools below to expand this change across multiple dates without altering the original pattern.</DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-5">
+            <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-[11px] font-medium text-amber-800">
+              This editor affects only the selected instance. The weekly schedule stays intact unless you explicitly switch to a recurring series below.
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block text-sm font-medium text-ink">
+                Session name
+                <input className="input mt-1" value={sessionDraft.name} onChange={(e) => setSessionDraft({ ...sessionDraft, name: e.target.value })} />
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                Status
+                <select className="input mt-1" value={sessionDraft.status} onChange={(e) => setSessionDraft({ ...sessionDraft, status: e.target.value })}>
+                  <option value="scheduled">Scheduled</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="rescheduled">Rescheduled</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block text-sm font-medium text-ink">
+                Venue
+                <select className="input mt-1" value={sessionDraft.venue_id} onChange={(e) => setSessionDraft({ ...sessionDraft, venue_id: e.target.value })}>
+                  {venues.map((v: Venue) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </label>
+              <div className="flex items-end gap-2">
+                <button className="btn btn-ghost w-full" onClick={resetSessionToRecurringPattern}>Reset to recurring pattern</button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block text-sm font-medium text-ink">
+                Start
+                <input type="datetime-local" className="input mt-1" value={sessionDraft.start_at} onChange={(e) => setSessionDraft({ ...sessionDraft, start_at: e.target.value })} />
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                End
+                <input type="datetime-local" className="input mt-1" value={sessionDraft.end_at} onChange={(e) => setSessionDraft({ ...sessionDraft, end_at: e.target.value })} />
+              </label>
+            </div>
+
+            <div className="rounded-xl border border-line bg-surface-inset/40 p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-bold text-ink">Convert this single session into a recurring series</div>
+                  <div className="text-[11px] text-ink-faint">Applies across the selected date range and respects term / UK bank holiday skips.</div>
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => setRecurrenceForm({
+                  frequency: 'weekly',
+                  start_date: editingSession?.start_at.slice(0, 10) ?? '',
+                  end_date: editingSession?.start_at.slice(0, 10) ?? '',
+                  skip_term_holidays: true,
+                  skip_bank_holidays: true,
+                })}>Reset recurrence</button>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block text-sm font-medium text-ink">
+                  Frequency
+                  <select className="input mt-1" value={recurrenceForm.frequency} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, frequency: e.target.value })}>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-weekly</option>
+                    <option value="fortnightly">Fortnightly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                  </select>
+                </label>
+                <div />
+                <label className="block text-sm font-medium text-ink">
+                  Start date
+                  <input type="date" className="input mt-1" value={recurrenceForm.start_date || editingSession?.start_at.slice(0, 10) || ''} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, start_date: e.target.value })} />
+                </label>
+                <label className="block text-sm font-medium text-ink">
+                  End date
+                  <input type="date" className="input mt-1" value={recurrenceForm.end_date || editingSession?.start_at.slice(0, 10) || ''} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, end_date: e.target.value })} />
+                </label>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input type="checkbox" checked={recurrenceForm.skip_term_holidays} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, skip_term_holidays: e.target.checked })} />
+                  Skip term breaks
+                </label>
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input type="checkbox" checked={recurrenceForm.skip_bank_holidays} onChange={(e) => setRecurrenceForm({ ...recurrenceForm, skip_bank_holidays: e.target.checked })} />
+                  Skip UK bank holidays
+                </label>
+              </div>
+              <div className="mt-4">
+                {recurrenceSummary && recurrencePreview.length > 0 && (
+                  <ReviewAndConfirmBanner
+                    title="Review and confirm"
+                    description="Check the generated dates and holiday exclusions before applying this recurring update."
+                    count={recurrenceSummary.affectedDatesCount}
+                    range={`${recurrenceForm.start_date || editingSession?.start_at.slice(0, 10) || '—'} → ${recurrenceForm.end_date || editingSession?.start_at.slice(0, 10) || '—'}`}
+                    skipBankHolidays={recurrenceForm.skip_bank_holidays}
+                    skipTermHolidays={recurrenceForm.skip_term_holidays}
+                    tone={recurrenceSummary.affectedDatesCount >= 5 ? 'warning' : 'neutral'}
+                  />
+                )}
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button className="btn btn-ghost" onClick={previewRecurrenceDates}>Preview generated dates</button>
+                  <button className="btn btn-ghost" onClick={clearRecurrencePreview}>Cancel preview</button>
+                  <button className="btn btn-primary" onClick={applyRecurringSeries} disabled={!recurrencePreview.length}>Apply recurring series</button>
+                </div>
+              </div>
+
+              {recurrenceSummary && recurrencePreview.length > 0 && (
+                <div className="mt-3 rounded-lg border border-line bg-surface p-3">
+                  <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Preview summary</div>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Generated</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.totalGenerated}</div>
+                    </div>
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped bank holidays</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedBankHolidays}</div>
+                    </div>
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped term breaks</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedTermHolidays}</div>
+                    </div>
+                    <div className="rounded-md border border-line bg-surface-inset p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Affected dates</div>
+                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.affectedDatesCount}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 text-[11px] font-medium text-ink-faint">Dates to apply</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {recurrencePreview.map(date => (
+                      <span key={date} className="rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-medium text-ink">{date}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <button className="btn btn-ghost" onClick={() => setEditingSession(null)}>Close</button>
+            <button className="btn btn-danger" onClick={cancelThisDateOnly}>Cancel this date only</button>
+            <button className="btn btn-primary" onClick={saveSessionEdit}>Save this occurrence</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Empty / loading */}
       <AnimatePresence>
         {loading && (
@@ -846,17 +1862,136 @@ export function Scheduling() {
   const [schedules, setSchedules] = useState<any[]>([]);
   const [holidays, setHolidays] = useState<any[]>([]);
   const [venues, setVenues] = useState<any[]>([]);
+  const [allSessions, setAllSessions] = useState<any[]>([]);
+  const [selectedVenueFilter, setSelectedVenueFilter] = useState<string>('all');
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [sessionStatusFilter, setSessionStatusFilter] = useState<'all' | 'scheduled' | 'completed' | 'cancelled'>('all');
+  const [bulkSessionMode, setBulkSessionMode] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [showNewScheduling, setShowNewScheduling] = useState(false);
+  const [showNewSession, setShowNewSession] = useState(false);
+  const [patternsExpanded, setPatternsExpanded] = useState(false);
+  const [holidaysExpanded, setHolidaysExpanded] = useState(false);
+  const [sessionForm, setSessionForm] = useState({
+    name: '',
+    venue_id: '',
+    start_at: '',
+    end_at: '',
+    status: 'scheduled',
+  });
   const [form, setForm] = useState({ name: '', venue_id: '', day_of_week: 2, valid_from: '', valid_to: '', start_time: '18:00', end_time: '19:00' });
-  const load = () => {
-    supabase.from('mentis_weekly_schedules').select('*,mentis_venues(name)').then(({ data }) => setSchedules(data ?? []));
-    supabase.from('mentis_holiday_calendar').select('*').order('starts_on').then(({ data }) => setHolidays(data ?? []));
-    supabase.from('mentis_venues').select('id,name').then(({ data }) => setVenues(data ?? []));
+
+  const toInputDateTime = (iso: string | null | undefined) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
-  useEffect(() => { load(); }, []);
+
+  const resetSessionForm = () => {
+    setEditingSessionId(null);
+    setSelectedSessionId(null);
+    setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' });
+  };
+
+  const load = async () => {
+    const orgId = staff?.organization_id;
+    const [scheduleRes, holidayRes, venueRes, sessionRes, enrollmentRes] = await Promise.all([
+      supabase.from('mentis_weekly_schedules').select('*,mentis_venues(name)').eq('organization_id', orgId ?? ''),
+      supabase.from('mentis_holiday_calendar').select('*').order('starts_on'),
+      supabase.from('mentis_venues').select('id,name').eq('organization_id', orgId ?? ''),
+      supabase.from('mentis_sessions').select('id,name,venue_id,status,start_at,end_at,schedule_id,mentis_venues(name)').eq('organization_id', orgId ?? '').order('start_at', { ascending: true }),
+      supabase.from('mentis_enrollments').select('session_id'),
+    ]);
+
+    setSchedules(scheduleRes.data ?? []);
+    setHolidays(holidayRes.data ?? []);
+    setVenues(venueRes.data ?? []);
+
+    const counts = new Map<string, number>();
+    (enrollmentRes.data ?? []).forEach((row: any) => {
+      counts.set(row.session_id, (counts.get(row.session_id) ?? 0) + 1);
+    });
+
+    const sessions = (sessionRes.data ?? []).map((row: any) => ({
+      ...row,
+      venue_name: row.mentis_venues?.name ?? 'Unknown venue',
+      headcount: counts.get(row.id) ?? 0,
+      start_label: new Date(row.start_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
+      end_label: new Date(row.end_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
+    }));
+
+    setAllSessions(sessions);
+    if (!selectedSessionId && sessions.length) {
+      setSelectedSessionId(sessions[0].id);
+    }
+  };
+
+  useEffect(() => { if (staff?.organization_id) load(); }, [staff?.organization_id]);
+
   const create = async () => {
     const { error } = await supabase.from('mentis_weekly_schedules').insert({ organization_id: staff?.organization_id, ...form });
     if (error) alert(error.message); else { setForm({ ...form, name: '' }); load(); }
   };
+
+  const saveSession = async () => {
+    if (!sessionForm.name.trim() || !sessionForm.venue_id || !sessionForm.start_at || !sessionForm.end_at) {
+      alert('Please complete the session name, venue, start time and end time.');
+      return;
+    }
+
+    const payload = {
+      organization_id: staff?.organization_id,
+      name: sessionForm.name.trim(),
+      venue_id: sessionForm.venue_id,
+      start_at: new Date(sessionForm.start_at).toISOString(),
+      end_at: new Date(sessionForm.end_at).toISOString(),
+      status: sessionForm.status,
+    };
+
+    if (editingSessionId) {
+      const { error } = await supabase.from('mentis_sessions').update(payload).eq('id', editingSessionId);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from('mentis_sessions').insert(payload);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    resetSessionForm();
+    load();
+  };
+
+  const deleteSession = async (id: string) => {
+    const { error } = await supabase.from('mentis_sessions').delete().eq('id', id);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    if (selectedSessionId === id) setSelectedSessionId(null);
+    load();
+  };
+
+  const beginEditSession = (session: any) => {
+    setEditingSessionId(session.id);
+    setSelectedSessionId(session.id);
+    setSessionForm({
+      name: session.name,
+      venue_id: session.venue_id,
+      start_at: toInputDateTime(session.start_at),
+      end_at: toInputDateTime(session.end_at),
+      status: session.status,
+    });
+  };
+
   const generate = async (sch: any) => {
     const out: { date: string }[] = [];
     const d = new Date(`${sch.valid_from}T00:00:00Z`);
@@ -875,32 +2010,399 @@ export function Scheduling() {
       d.setUTCDate(d.getUTCDate() + 1);
     }
     alert(`Generated ${out.length} instances (holidays skipped, conflicts blocked at save).`);
+    load();
   };
+
+  const filteredSessions = allSessions.filter(session => {
+    const matchesVenue = selectedVenueFilter === 'all' || session.venue_id === selectedVenueFilter;
+    const matchesSearch = !sessionSearch.trim() || session.name.toLowerCase().includes(sessionSearch.trim().toLowerCase());
+    const matchesStatus = sessionStatusFilter === 'all' || session.status === sessionStatusFilter;
+    return matchesVenue && matchesSearch && matchesStatus;
+  });
+
+  const selectedSession = useMemo(
+    () => allSessions.find(session => session.id === selectedSessionId) ?? filteredSessions[0] ?? null,
+    [allSessions, selectedSessionId, filteredSessions],
+  );
+
+  const toggleSessionSelection = (sessionId: string) => {
+    setSelectedSessionIds(prev => prev.includes(sessionId) ? prev.filter(id => id !== sessionId) : [...prev, sessionId]);
+  };
+
+  const toggleAllVisibleSessions = () => {
+    const visibleIds = filteredSessions.map(session => session.id);
+    if (!visibleIds.length) return;
+    setSelectedSessionIds(prev => {
+      const allVisibleSelected = visibleIds.every(id => prev.includes(id));
+      return allVisibleSelected ? prev.filter(id => !visibleIds.includes(id)) : Array.from(new Set([...prev, ...visibleIds]));
+    });
+  };
+
+  const bulkUpdateSessionStatus = async (status: 'scheduled' | 'completed' | 'cancelled') => {
+    if (!selectedSessionIds.length) return;
+    const { error } = await supabase.from('mentis_sessions').update({ status }).in('id', selectedSessionIds);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    setSelectedSessionIds([]);
+    setBulkSessionMode(false);
+    load();
+  };
+
+  const bulkDeleteSessions = async () => {
+    if (!selectedSessionIds.length) return;
+    if (!window.confirm(`Delete ${selectedSessionIds.length} selected session(s)?`)) return;
+    const { error } = await supabase.from('mentis_sessions').delete().in('id', selectedSessionIds);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    setSelectedSessionIds([]);
+    setBulkSessionMode(false);
+    load();
+  };
+
   if (!canDo('sessions.manage')) return <div className="p-8">Admin only.</div>;
   return (
     <div>
-      <PageHeader title="Scheduling" subtitle="Weekly patterns → instances · holidays · overrides" actions={<Link to="/overrides" className="btn btn-ghost">Overrides</Link>} />
-      <div className="card p-4 mb-4 flex flex-col gap-2" style={{ maxWidth: 700 }}>
-        <h3 className="font-bold">New weekly schedule</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <input className="input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <select className="input" value={form.venue_id} onChange={(e) => setForm({ ...form, venue_id: e.target.value })}>
-            <option value="">Venue…</option>{venues.map((v: any) => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-          <label className="text-sm">Day <select className="input" value={form.day_of_week} onChange={(e) => setForm({ ...form, day_of_week: Number(e.target.value) })}>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => <option key={i} value={i}>{d}</option>)}</select></label>
-          <label className="text-sm">From <input type="date" className="input" value={form.valid_from} onChange={(e) => setForm({ ...form, valid_from: e.target.value })} /></label>
-          <label className="text-sm">To <input type="date" className="input" value={form.valid_to} onChange={(e) => setForm({ ...form, valid_to: e.target.value })} /></label>
-          <label className="text-sm">Start <input type="time" className="input" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></label>
-          <label className="text-sm">End <input type="time" className="input" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} /></label>
+      <PageHeader
+        title="Scheduling"
+        subtitle="Weekly patterns → instances · holidays · overrides"
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowNewScheduling(v => !v)}
+            >
+              {showNewScheduling ? 'Close' : 'New Scheduling'}
+            </button>
+            <Link to="/overrides" className="btn btn-ghost">Overrides</Link>
+          </div>
+        }
+      />
+      <Dialog open={showNewScheduling} onOpenChange={(open) => setShowNewScheduling(open)}>
+        <DialogContent size="lg">
+          <DialogHeader>
+            <DialogTitle>New weekly schedule</DialogTitle>
+            <DialogDescription>Create a recurring pattern for a venue and date range.</DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block text-sm font-medium text-ink">
+                Name
+                <input className="input mt-1" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                Venue
+                <select className="input mt-1" value={form.venue_id} onChange={(e) => setForm({ ...form, venue_id: e.target.value })}>
+                  <option value="">Venue…</option>{venues.map((v: any) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                Day
+                <select className="input mt-1" value={form.day_of_week} onChange={(e) => setForm({ ...form, day_of_week: Number(e.target.value) })}>
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => <option key={i} value={i}>{d}</option>)}
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                From
+                <input type="date" className="input mt-1" value={form.valid_from} onChange={(e) => setForm({ ...form, valid_from: e.target.value })} />
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                To
+                <input type="date" className="input mt-1" value={form.valid_to} onChange={(e) => setForm({ ...form, valid_to: e.target.value })} />
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                Start
+                <input type="time" className="input mt-1" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} />
+              </label>
+              <label className="block text-sm font-medium text-ink">
+                End
+                <input type="time" className="input mt-1" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} />
+              </label>
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <button className="btn btn-ghost" onClick={() => setShowNewScheduling(false)}>Close</button>
+            <button className="btn btn-primary" onClick={() => { create(); setShowNewScheduling(false); }}>Create pattern</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div className="mb-4 grid gap-4 xl:grid-cols-[1.4fr_0.9fr]">
+        <div className="card overflow-hidden">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 border-b border-line bg-surface-inset/40 px-4 py-3 text-left"
+            onClick={() => setPatternsExpanded(v => !v)}
+          >
+            <div>
+              <div className="text-sm font-bold text-ink">Patterns</div>
+              <div className="text-[11px] text-ink-faint">{schedules.length} active recurring schedules</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-surface px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">
+                {schedules.length}
+              </span>
+              <ChevronDown className={cn('size-4 text-ink-faint transition-transform', patternsExpanded && 'rotate-180')} />
+            </div>
+          </button>
+
+          <AnimatePresence initial={false}>
+            {patternsExpanded && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="overflow-hidden"
+              >
+                <div className="space-y-2 p-4">
+                  {schedules.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-line bg-surface-hover/40 p-3 text-sm text-ink-muted">
+                      No recurring patterns yet. Create one to generate session instances.
+                    </div>
+                  ) : (
+                    schedules.map((s: any) => (
+                      <div key={s.id} className="flex flex-col gap-2 rounded-xl border border-line bg-surface-inset/30 p-3 md:flex-row md:items-center md:justify-between">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-ink">{s.name}</div>
+                          <div className="text-[11px] text-ink-faint">
+                            {s.mentis_venues?.name} · {s.valid_from} → {s.valid_to}
+                          </div>
+                        </div>
+                        <button className="btn btn-ghost btn-sm whitespace-nowrap" onClick={() => generate(s)}>
+                          Generate
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
-        <button className="btn btn-primary" style={{ width: 'fit-content' }} onClick={create}>Create pattern</button>
+
+        <div className="card overflow-hidden">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 border-b border-line bg-surface-inset/40 px-4 py-3 text-left"
+            onClick={() => setHolidaysExpanded(v => !v)}
+          >
+            <div>
+              <div className="text-sm font-bold text-ink">Holiday calendar</div>
+              <div className="text-[11px] text-ink-faint">Red columns in the workbook</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-danger-soft px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-danger">
+                {holidays.length}
+              </span>
+              <ChevronDown className={cn('size-4 text-ink-faint transition-transform', holidaysExpanded && 'rotate-180')} />
+            </div>
+          </button>
+
+          <AnimatePresence initial={false}>
+            {holidaysExpanded && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="overflow-hidden"
+              >
+                <div className="space-y-2 p-4">
+                  {holidays.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-line bg-surface-hover/40 p-3 text-sm text-ink-muted">
+                      No holiday rules configured.
+                    </div>
+                  ) : (
+                    holidays.map((h: any) => (
+                      <div key={h.id} className="flex items-start gap-2 rounded-lg border border-line bg-surface-inset/30 px-3 py-2 text-sm">
+                        <span className="mt-1 size-2 rounded-full bg-danger" />
+                        <div className="min-w-0">
+                          <div className="font-medium text-ink">{h.name}</div>
+                          <div className="text-[11px] text-ink-faint">
+                            {h.kind.replace('_', ' ')} · {h.starts_on} → {h.ends_on}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
-      <div className="grid md:grid-cols-2 gap-4">
-        <div className="card p-4"><h3 className="font-bold mb-2">Patterns</h3>
-          {schedules.map((s: any) => <div key={s.id} className="flex justify-between py-1 text-sm"><span>{s.name} · {s.mentis_venues?.name} · {s.valid_from}→{s.valid_to}</span><button className="btn btn-ghost" onClick={() => generate(s)}>Generate</button></div>)}
+
+      <Dialog open={showNewSession} onOpenChange={(open) => setShowNewSession(open)}>
+        <DialogContent size="md">
+          <DialogHeader>
+            <DialogTitle>Create session</DialogTitle>
+            <DialogDescription>Add a single session instance for the selected venue and time.</DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            <label className="block text-sm">
+              Session name
+              <input className="input mt-1" value={sessionForm.name} onChange={(e) => setSessionForm({ ...sessionForm, name: e.target.value })} />
+            </label>
+            <label className="block text-sm">
+              Venue
+              <select className="input mt-1" value={sessionForm.venue_id} onChange={(e) => setSessionForm({ ...sessionForm, venue_id: e.target.value })}>
+                <option value="">Select venue</option>
+                {venues.map((v: any) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                Start
+                <input type="datetime-local" className="input mt-1" value={sessionForm.start_at} onChange={(e) => setSessionForm({ ...sessionForm, start_at: e.target.value })} />
+              </label>
+              <label className="block text-sm">
+                End
+                <input type="datetime-local" className="input mt-1" value={sessionForm.end_at} onChange={(e) => setSessionForm({ ...sessionForm, end_at: e.target.value })} />
+              </label>
+            </div>
+            <label className="block text-sm">
+              Status
+              <select className="input mt-1" value={sessionForm.status} onChange={(e) => setSessionForm({ ...sessionForm, status: e.target.value })}>
+                <option value="scheduled">Scheduled</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
+          </DialogBody>
+          <DialogFooter>
+            <button className="btn btn-ghost" onClick={() => { setShowNewSession(false); setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' }); }}>Clear</button>
+            <button className="btn btn-primary" onClick={saveSession}>Create session</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div className="card p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
+          <div>
+            <h3 className="font-bold">All sessions</h3>
+            <p className="text-sm text-ink-muted">Organization-wide view of every session for the current org.</p>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <input
+              className="input"
+              style={{ width: 180 }}
+              placeholder="Search session"
+              value={sessionSearch}
+              onChange={(e) => setSessionSearch(e.target.value)}
+            />
+            <select className="input" value={sessionStatusFilter} onChange={(e) => setSessionStatusFilter(e.target.value as 'all' | 'scheduled' | 'completed' | 'cancelled')}>
+              <option value="all">All statuses</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <select className="input" value={selectedVenueFilter} onChange={(e) => setSelectedVenueFilter(e.target.value)}>
+              <option value="all">All venues</option>
+              {venues.map((v: any) => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                setEditingSessionId(null);
+                setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' });
+                setShowNewSession(true);
+              }}
+            >
+              New Session
+            </button>
+          </div>
         </div>
-        <div className="card p-4"><h3 className="font-bold mb-2">Holiday calendar — red columns in workbook</h3>
-          {holidays.map((h: any) => <div key={h.id} className="text-sm py-1 flex items-center gap-2"><span className="size-2 rounded-full bg-danger inline-block" /> {h.name} <em>({h.kind})</em> {h.starts_on}→{h.ends_on}</div>)}
+
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button className="btn btn-ghost btn-sm" onClick={() => setBulkSessionMode(v => !v)}>
+            {bulkSessionMode ? 'Exit bulk mode' : 'Bulk actions'}
+          </button>
+          {bulkSessionMode && (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={toggleAllVisibleSessions}>Select all visible</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedSessionIds([])}>Clear selection</button>
+              <button className="btn btn-ghost btn-sm text-danger" onClick={bulkDeleteSessions} disabled={!selectedSessionIds.length}>Delete selected</button>
+              <select
+                className="input"
+                style={{ width: 150 }}
+                value=""
+                onChange={(e) => {
+                  const nextStatus = e.target.value as 'scheduled' | 'completed' | 'cancelled';
+                  if (nextStatus) bulkUpdateSessionStatus(nextStatus);
+                  e.target.value = '';
+                }}
+              >
+                <option value="">Set status…</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </>
+          )}
+          {selectedSessionIds.length > 0 && bulkSessionMode && (
+            <span className="rounded-full bg-brand-soft px-2 py-1 text-[11px] font-semibold text-brand">{selectedSessionIds.length} selected</span>
+          )}
+        </div>
+
+        <div className="w-full">
+          <div className="overflow-hidden rounded-lg border border-line">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="bg-surface-inset text-ink-faint">
+                  <tr>
+                    {bulkSessionMode && <th className="px-3 py-2 w-8"><span className="sr-only">Select</span></th>}
+                    <th className="px-3 py-2">Session</th>
+                    <th className="px-3 py-2">Timing</th>
+                    <th className="px-3 py-2">Venue</th>
+                    <th className="px-3 py-2">Headcount</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSessions.map((session: any) => (
+                    <tr
+                      key={session.id}
+                      className={session.id === selectedSessionId ? 'bg-brand-soft/40' : 'bg-surface hover:bg-surface-hover'}
+                      onClick={() => setSelectedSessionId(session.id)}
+                    >
+                      {bulkSessionMode && (
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedSessionIds.includes(session.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleSessionSelection(session.id)}
+                          />
+                        </td>
+                      )}
+                      <td className="px-3 py-2 font-medium">{session.name}</td>
+                      <td className="px-3 py-2">
+                        <div>{session.start_label}</div>
+                        <div className="text-ink-muted">→ {session.end_label}</div>
+                      </td>
+                      <td className="px-3 py-2">{session.venue_name}</td>
+                      <td className="px-3 py-2 tabular-nums">{session.headcount}</td>
+                      <td className="px-3 py-2">
+                        <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-medium">{session.status}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex justify-end gap-2">
+                          <button className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); beginEditSession(session); }}>Modify</button>
+                          <button className="btn btn-ghost btn-sm text-danger" onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>

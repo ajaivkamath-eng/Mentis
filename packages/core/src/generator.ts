@@ -1,6 +1,6 @@
 /* Weekly-schedule generation with holiday exceptions + conflict checks
  * (rules 16–18). Venue concurrency default 1; back-to-back allowed. */
-export type Holiday = { kind: 'term_holiday_week' | 'bank_holiday' | 'manual'; startsOn: string; endsOn: string; name?: string };
+export type Holiday = { kind: 'term_break' | 'bank_holiday' | 'manual'; startsOn: string; endsOn: string; name?: string };
 export type ScheduleStaff = { staffId: string; capacity: 'lead' | 'assistant' | 'sparrer'; rateCardId?: string };
 export type WeeklySchedule = {
   id: string; venueId: string; dayOfWeek: number; validFrom: string; validTo: string;
