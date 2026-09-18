@@ -22,7 +22,7 @@ separate Mentis role set. Supabase Auth is the only login.
 ```bash
 # Core + DB suites
 npm install
-npm test            # 125 tests: rules + migrations + RLS matrix on PGlite Postgres + design-token parity
+npm test            # 141 tests: rules + migrations + RLS matrix on PGlite Postgres + design-token parity + diary domain
 npx tsc --noEmit
 
 # Web console

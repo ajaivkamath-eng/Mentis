@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import { can, switchableRoles, type Permission, type Role } from '@mentis/core';
-import { DEMO_USER_ID, demoStaff, endDemoSession, isDemoSession } from './demo';
+import { DEMO_USER_ID, demoEnabled, demoStaff, endDemoSession, isDemoSession, startDemoSession } from './demo';
 
 export interface StaffRow { id: string; organization_id: string; user_id: string; roles: Role[]; display_name: string }
 
@@ -25,8 +25,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Design-review mode: a local, backend-free Super Admin session.
-    if (isDemoSession()) {
+    // Design-review mode: a local, backend-free Super Admin session. Enabled by
+    // the stored flag, or automatically in dev builds without Supabase creds
+    // (the documented demo.ts contract — never in a connected build).
+    if (isDemoSession() || demoEnabled) {
+      if (!isDemoSession()) startDemoSession();
       setUserId(DEMO_USER_ID);
       return;
     }
