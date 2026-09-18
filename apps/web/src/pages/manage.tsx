@@ -135,13 +135,17 @@ export function Holidays() {
   const { staff } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [form, setForm] = useState({ name: '', kind: 'manual', starts_on: '', ends_on: '' });
+  const [editingId, setEditingId] = useState<string | null>(null);
   const load = () => supabase.from('mentis_holiday_calendar').select('*').order('starts_on').then(({ data }) => setRows(data ?? []));
   useEffect(() => { load(); }, []);
   const save = async () => {
     if (!form.name.trim() || !form.starts_on || !form.ends_on) return;
-    await supabase.from('mentis_holiday_calendar').insert({ organization_id: staff?.organization_id, ...form });
-    setForm({ ...form, name: '' }); load();
+    if (editingId) await supabase.from('mentis_holiday_calendar').update(form).eq('id', editingId);
+    else await supabase.from('mentis_holiday_calendar').insert({ organization_id: staff?.organization_id, ...form });
+    setForm({ name: '', kind: 'manual', starts_on: '', ends_on: '' }); setEditingId(null); load();
   };
+  const edit = (h: any) => { setEditingId(h.id); setForm({ name: h.name, kind: h.kind, starts_on: h.starts_on, ends_on: h.ends_on }); };
+  const remove = async (id: string) => { if (confirm('Delete this calendar entry?')) { await supabase.from('mentis_holiday_calendar').delete().eq('id', id); load(); } };
   return (
     <div>
       <PageTitle title="Holiday calendar" sub="Term breaks, bank holidays, manual no-session ranges" />
@@ -152,9 +156,10 @@ export function Holidays() {
         </select>
         <label className="text-sm">From <input type="date" className="input" value={form.starts_on} onChange={(e) => setForm({ ...form, starts_on: e.target.value })} /></label>
         <label className="text-sm">To <input type="date" className="input" value={form.ends_on} onChange={(e) => setForm({ ...form, ends_on: e.target.value })} /></label>
-        <button className="btn btn-primary" onClick={save}>Add</button>
+        <button className="btn btn-primary" onClick={save}>{editingId ? 'Save changes' : 'Add'}</button>
+        {editingId && <button className="btn btn-ghost" onClick={() => { setEditingId(null); setForm({ name: '', kind: 'manual', starts_on: '', ends_on: '' }); }}>Cancel</button>}
       </div>
-      <div className="card p-4">{rows.map((h: any) => <div key={h.id} className="text-sm py-1">• {h.name} <em>({h.kind})</em> {h.starts_on}→{h.ends_on}</div>)}</div>
+      <div className="card p-4">{rows.map((h: any) => <div key={h.id} className="flex items-center gap-3 text-sm py-2 border-b border-line last:border-0"><span className="flex-1">• {h.name} <em>({h.kind})</em> {h.starts_on} → {h.ends_on}</span><button className="btn btn-ghost btn-sm" onClick={() => edit(h)}>Edit</button><button className="btn btn-ghost btn-sm text-danger" onClick={() => remove(h.id)}>Delete</button></div>)}</div>
     </div>
   );
 }

@@ -206,6 +206,8 @@ export function Sessions() {
   const [members, setMembers] = useState<Member[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [memberSearch, setMemberSearch] = useState('');
 
   const [selectedVenue, setSelectedVenue] = useState<string>('all');
   const [selectedGroupKey, setSelectedGroupKey] = useState<string>('');
@@ -922,7 +924,11 @@ export function Sessions() {
         const allGroups = Array.from(groupMap.values()).map(g => ({
           ...g,
           sessions: g.sessions.sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)),
-        }));
+        })).sort((a, b) => {
+          const ad = new Date(a.sessions[0]?.start_at ?? 0); const bd = new Date(b.sessions[0]?.start_at ?? 0);
+          const weekday = (d: Date) => (d.getDay() + 6) % 7;
+          return weekday(ad) - weekday(bd) || (ad.getHours() * 60 + ad.getMinutes()) - (bd.getHours() * 60 + bd.getMinutes()) || a.name.localeCompare(b.name);
+        });
 
         setGroups(allGroups);
         setMembers((mData ?? []).map((m: any) => ({ id: m.id, name: m.name })) as Member[]);
@@ -1033,6 +1039,13 @@ export function Sessions() {
     if (!scrollRef.current) return;
     scrollRef.current.scrollBy({ left: dir === 'left' ? -240 : 240, behavior: 'smooth' });
   };
+
+  if (loading) return (
+    <div className="flex flex-col gap-4">
+      <PageHeader title="Sessions Workbook" eyebrow="Spreadsheet mode" subtitle="Loading sessions…" />
+      <div className="card p-6"><div className="h-6 w-48 animate-pulse rounded bg-surface-hover" /><div className="mt-4 h-40 animate-pulse rounded bg-surface-hover" /></div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -1201,11 +1214,7 @@ export function Sessions() {
                       />
                     </span>
                   )}
-                  <span className="max-w-[14ch] truncate">{g.name}</span>
-                  <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-medium text-ink-faint">
-                    <Clock className="size-3" />
-                    {g.dayLabel} {g.timeLabel}
-                  </span>
+                  <span className="max-w-[20ch] truncate" title={`${g.dayLabel ?? ''} · ${g.timeLabel}`}>{g.name}</span>
                   {holidayCount > 0 && (
                     <span className="rounded-full bg-danger-soft px-1 py-0.5 text-[9px] font-bold text-danger">{holidayCount} HOL</span>
                   )}
@@ -1269,7 +1278,7 @@ export function Sessions() {
                 </button>
               </div>
               {canDo('sessions.manage') && (
-                <Button size="sm" intent="soft" iconLeft={<Plus className="size-4" />}>
+                <Button size="sm" intent="soft" iconLeft={<Plus className="size-4" />} onClick={() => setShowMemberPicker(true)}>
                   Add member
                 </Button>
               )}
@@ -1836,6 +1845,22 @@ export function Sessions() {
             <button className="btn btn-danger" onClick={cancelThisDateOnly}>Cancel this date only</button>
             <button className="btn btn-primary" onClick={saveSessionEdit}>Save this occurrence</button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showMemberPicker} onOpenChange={setShowMemberPicker}>
+        <DialogContent size="md">
+          <DialogHeader><DialogTitle>Add member to {selectedGroup?.name}</DialogTitle><DialogDescription>Search members and tasters. Already enrolled members are disabled.</DialogDescription></DialogHeader>
+          <DialogBody>
+            <input className="input mb-3 w-full" placeholder="Search members or tasters…" value={memberSearch} onChange={e => setMemberSearch(e.target.value)} />
+            <div className="max-h-80 overflow-auto divide-y divide-line">
+              {members.filter(m => m.name.toLowerCase().includes(memberSearch.toLowerCase())).map(m => {
+                const enrolled = selectedGroup?.memberIds.includes(m.id);
+                return <button key={m.id} disabled={enrolled} className="flex w-full items-center justify-between p-3 text-left hover:bg-surface-hover disabled:opacity-40" onClick={async () => { if (!selectedGroup || enrolled) return; await supabase.from('mentis_enrollments').insert({ session_id: selectedGroup.sessions[0]?.id, member_id: m.id }); setGroups(gs => gs.map(g => g.key === selectedGroup.key ? { ...g, memberIds: [...g.memberIds, m.id] } : g)); setShowMemberPicker(false); }}><span>{m.name}</span><span className="text-xs text-ink-muted">{enrolled ? 'Added' : 'Add · includes tasters'}</span></button>;
+              })}
+            </div>
+          </DialogBody>
+          <DialogFooter><button className="btn btn-ghost" onClick={() => setShowMemberPicker(false)}>Close</button></DialogFooter>
         </DialogContent>
       </Dialog>
 
