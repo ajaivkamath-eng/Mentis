@@ -49,6 +49,19 @@ function loadSettings(): Settings {
   return { startHour: 7, endHour: 22, slotMinutes: 15 };
 }
 
+/** Keep the diary useful at phone width without baking the viewport into CSS. */
+function useNarrowScreen() {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)');
+    const update = () => setNarrow(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  return narrow;
+}
+
 const KIND_GROUP: Record<string, 'availability' | 'timeoff' | 'duty' | 'bookings'> = {
   available: 'availability', working_hours: 'availability',
   holiday: 'timeoff', sick_leave: 'timeoff', personal_appointment: 'timeoff', out_of_office: 'timeoff', unavailable_other: 'timeoff', other: 'timeoff',
@@ -63,9 +76,22 @@ export function Availability() {
   const navigate = useNavigate();
   const api = useDiaryData();
   const { state, isDemo } = api;
+  const isMobile = useNarrowScreen();
 
-  const [view, setView] = useState<View>('week');
+  // A seven-column time grid is too dense to operate at phone width. Start on
+  // one day there; users can still switch to the mobile agenda for the whole
+  // week, or use the day arrows for quick register work.
+  const [view, setView] = useState<View>(() => (
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'day' : 'week'
+  ));
   const [cursor, setCursor] = useState(() => new Date());
+  const mobileViewApplied = useRef(false);
+
+  useEffect(() => {
+    if (isMobile && !mobileViewApplied.current && view === 'week') setView('day');
+    mobileViewApplied.current = isMobile;
+    if (!isMobile) mobileViewApplied.current = false;
+  }, [isMobile, view]);
   const [staffIds, setStaffIds] = useState<string[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [clipboard, setClipboard] = useState<{ ids: string[]; cut: boolean } | null>(null);
@@ -435,7 +461,7 @@ export function Availability() {
         subtitle="Calendar-first personal diary — drag to plan, click to edit, patterns for regular hours"
         actions={
           <div className="flex flex-wrap items-center gap-1.5">
-            <Button intent="secondary" size="sm" onClick={() => setHelpOpen({ x: window.innerWidth - 420, y: 150 })} aria-label="Keyboard shortcuts">
+            <Button className="hidden sm:inline-flex" intent="secondary" size="sm" onClick={() => setHelpOpen({ x: window.innerWidth - 420, y: 150 })} aria-label="Keyboard shortcuts">
               <Keyboard className="size-3.5" /> Shortcuts
             </Button>
             <Badge tone={isDemo ? 'accent' : 'success'} size="sm" dot>{isDemo ? 'Design review data' : 'Live'}</Badge>
@@ -444,7 +470,7 @@ export function Availability() {
       />
 
       {/* =========================== toolbar =========================== */}
-      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface p-2">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface p-2 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:overscroll-x-contain">
         {/* staff selector */}
         <div className="relative">
           <button
@@ -542,23 +568,26 @@ export function Availability() {
           />
         </label>
 
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          {/* clipboard */}
-          <Button intent="ghost" size="sm" onClick={() => copySelection(false)} aria-label="Copy selected" title="Copy (Ctrl+C)"><Copy className="size-3.5" /></Button>
-          <Button intent="ghost" size="sm" onClick={() => copySelection(true)} aria-label="Cut selected" title="Cut (Ctrl+X)"><Scissors className="size-3.5" /></Button>
-          <Button
-            intent={clipboard ? 'soft' : 'ghost'}
-            size="sm"
-            disabled={!clipboard}
-            onClick={(e) => setPasteOpen({ x: e.clientX - 150, y: e.clientY + 12 })}
-            title="Paste options (Ctrl+V)"
-          >
-            <ClipboardPaste className="size-3.5" /> Paste
-          </Button>
-          <span className="mx-1 h-5 w-px bg-line" aria-hidden />
-          <Button intent="ghost" size="sm" disabled={!api.canUndo()} onClick={() => void api.undo()} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><Undo2 className="size-3.5" /></Button>
-          <Button intent="ghost" size="sm" disabled={!api.canRedo()} onClick={() => void api.redo()} aria-label="Redo (Ctrl+Y)" title="Redo (Ctrl+Y)"><Redo2 className="size-3.5" /></Button>
-          <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+        <div className="sm:ml-auto flex flex-wrap items-center gap-1.5">
+          {/* Clipboard and history are keyboard-friendly desktop actions. On a
+              phone they move out of the way so the date/view controls stay reachable. */}
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <Button intent="ghost" size="sm" onClick={() => copySelection(false)} aria-label="Copy selected" title="Copy (Ctrl+C)"><Copy className="size-3.5" /></Button>
+            <Button intent="ghost" size="sm" onClick={() => copySelection(true)} aria-label="Cut selected" title="Cut (Ctrl+X)"><Scissors className="size-3.5" /></Button>
+            <Button
+              intent={clipboard ? 'soft' : 'ghost'}
+              size="sm"
+              disabled={!clipboard}
+              onClick={(e) => setPasteOpen({ x: e.clientX - 150, y: e.clientY + 12 })}
+              title="Paste options (Ctrl+V)"
+            >
+              <ClipboardPaste className="size-3.5" /> Paste
+            </Button>
+            <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+            <Button intent="ghost" size="sm" disabled={!api.canUndo()} onClick={() => void api.undo()} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><Undo2 className="size-3.5" /></Button>
+            <Button intent="ghost" size="sm" disabled={!api.canRedo()} onClick={() => void api.redo()} aria-label="Redo (Ctrl+Y)" title="Redo (Ctrl+Y)"><Redo2 className="size-3.5" /></Button>
+            <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+          </div>
           {/* filters */}
           <div className="relative">
             <Button intent="ghost" size="sm" onClick={() => setFiltersOpen((o) => !o)} aria-expanded={filtersOpen}>
@@ -668,7 +697,7 @@ export function Availability() {
 
           {/* calendar surface */}
           <div className="min-h-[540px] flex-1">
-            {view === 'week' || view === 'day' ? (
+            {view === 'day' || (view === 'week' && !isMobile) ? (
               <TimeGrid
                 days={view === 'day' ? [cursor] : days}
                 events={rangeEvents}
@@ -684,6 +713,13 @@ export function Availability() {
                 onMove={(ev, start, end, staffId) => void handleMove(ev, start, end, staffId)}
                 onHeaderClick={(day) => { setCursor(day); setView('day'); }}
               />
+            ) : view === 'week' && isMobile ? (
+              <div className="card overflow-hidden">
+                <div className="border-b border-line bg-surface-inset/60 px-3 py-2 text-xs font-bold text-ink-muted">
+                  Week overview · tap a day to open the time grid
+                </div>
+                <AgendaView days={days} events={rangeEvents} selectedIds={selectedIds} onSelect={handleSelect} onOpen={handleOpen} onOpenDay={(day) => { setCursor(day); setView('day'); }} />
+              </div>
             ) : view === 'month' ? (
               <MonthGrid
                 monthAnchor={cursor}
