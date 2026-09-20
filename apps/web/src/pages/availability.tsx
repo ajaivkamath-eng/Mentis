@@ -6,6 +6,24 @@ import { explainSessionInsertError } from '../lib/sessionErrors';
 import { AlertTriangle, Calendar, Clock, UserCheck, UserX, ShieldAlert, Sparkles, Filter, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 
+/** Keep the diary useful at phone width without baking the viewport into CSS. */
+function useNarrowScreen() {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)');
+    const update = () => setNarrow(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  return narrow;
+}
+
+const KIND_GROUP: Record<string, 'availability' | 'timeoff' | 'duty' | 'bookings'> = {
+  available: 'availability', working_hours: 'availability',
+  holiday: 'timeoff', sick_leave: 'timeoff', personal_appointment: 'timeoff', out_of_office: 'timeoff', unavailable_other: 'timeoff', other: 'timeoff',
+  on_duty: 'duty', club_duty: 'duty', duty_outside_club: 'duty', working_elsewhere: 'duty', training: 'duty',
+  session: 'bookings', task: 'bookings',
 const availabilityLabels: Record<string, string> = {
   available: 'Available',
   on_duty: 'On duty',
@@ -134,6 +152,50 @@ const hydrateWeeklyPattern = (weekStart: Date, rows: any[], staffId: string): We
 
 /* ---------- Coach & Sparrer Personal Diary & Availability Matrix ---------- */
 export function Availability() {
+  const { staff, canDo, role } = useAuth();
+  const navigate = useNavigate();
+  const api = useDiaryData();
+  const { state, isDemo } = api;
+  const isMobile = useNarrowScreen();
+
+  // A seven-column time grid is too dense to operate at phone width. Start on
+  // one day there; users can still switch to the mobile agenda for the whole
+  // week, or use the day arrows for quick register work.
+  const [view, setView] = useState<View>(() => (
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'day' : 'week'
+  ));
+  const [cursor, setCursor] = useState(() => new Date());
+  const mobileViewApplied = useRef(false);
+
+  useEffect(() => {
+    if (isMobile && !mobileViewApplied.current && view === 'week') setView('day');
+    mobileViewApplied.current = isMobile;
+    if (!isMobile) mobileViewApplied.current = false;
+  }, [isMobile, view]);
+  const [staffIds, setStaffIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [clipboard, setClipboard] = useState<{ ids: string[]; cut: boolean } | null>(null);
+  const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
+  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [panel, setPanel] = useState<'calendar' | 'planner'>('calendar');
+
+  const [editorDraft, setEditorDraft] = useState<EditorDraft | null>(null);
+  const [quick, setQuick] = useState<{ draft: EditorDraft; range: { start: Date; end: Date }; anchor: Anchor } | null>(null);
+  const [details, setDetails] = useState<{ ev: DiaryEvent; anchor: Anchor } | null>(null);
+  const [pasteOpen, setPasteOpen] = useState<Anchor | null>(null);
+  const [pasteOptions, setPasteOptions] = useState<PasteOptions>(() => ({
+    mode: 'once', from: dateKey(startOfWeek(new Date())), to: dateKey(addDays(startOfWeek(new Date()), 6)),
+    weekdays: [1, 2, 3, 4, 5] as IsoWeekday[], timeMode: 'original', newTime: '09:00',
+  }));
+  const [planner, setPlanner] = useState<PlannerValue | null>(null);
+  const [staffPickerOpen, setStaffPickerOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState<Anchor | null>(null);
+
+  const meId = state.meId || staff?.id || '';
+
+  /* default staff selection = me */
   const { staff, canDo } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [staffList, setStaffList] = useState<any[]>([]);
@@ -760,6 +822,24 @@ export function Availability() {
   const hourlySlots = Array.from({ length: 14 }, (_, index) => 8 + index);
 
   return (
+    <div className="flex min-h-0 flex-col gap-3" ref={mainRef}>
+      <PageHeader
+        title="Coach diary & availability"
+        subtitle="Calendar-first personal diary — drag to plan, click to edit, patterns for regular hours"
+        actions={
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button className="hidden sm:inline-flex" intent="secondary" size="sm" onClick={() => setHelpOpen({ x: window.innerWidth - 420, y: 150 })} aria-label="Keyboard shortcuts">
+              <Keyboard className="size-3.5" /> Shortcuts
+            </Button>
+            <Badge tone={isDemo ? 'accent' : 'success'} size="sm" dot>{isDemo ? 'Design review data' : 'Live'}</Badge>
+          </div>
+        }
+      />
+
+      {/* =========================== toolbar =========================== */}
+      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface p-2 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:overscroll-x-contain">
+        {/* staff selector */}
+        <div className="relative">
     <div className="space-y-4">
       <PageTitle
         title="Coach Personal Diary & Availability Planner"
@@ -1071,6 +1151,54 @@ export function Availability() {
             if (event.target === event.currentTarget) clearDraftAppointment();
           }}
         >
+          <CalendarDays className="size-3.5 text-ink-muted" />
+          {rangeLabel}
+          <input
+            ref={datePickerRef}
+            type="date"
+            className="absolute inset-0 cursor-pointer opacity-0"
+            value={dateKey(cursor)}
+            onChange={(e) => e.target.value && setCursor(parseKey(e.target.value))}
+            aria-label="Go to date"
+            tabIndex={-1}
+          />
+        </label>
+
+        <div className="sm:ml-auto flex flex-wrap items-center gap-1.5">
+          {/* Clipboard and history are keyboard-friendly desktop actions. On a
+              phone they move out of the way so the date/view controls stay reachable. */}
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <Button intent="ghost" size="sm" onClick={() => copySelection(false)} aria-label="Copy selected" title="Copy (Ctrl+C)"><Copy className="size-3.5" /></Button>
+            <Button intent="ghost" size="sm" onClick={() => copySelection(true)} aria-label="Cut selected" title="Cut (Ctrl+X)"><Scissors className="size-3.5" /></Button>
+            <Button
+              intent={clipboard ? 'soft' : 'ghost'}
+              size="sm"
+              disabled={!clipboard}
+              onClick={(e) => setPasteOpen({ x: e.clientX - 150, y: e.clientY + 12 })}
+              title="Paste options (Ctrl+V)"
+            >
+              <ClipboardPaste className="size-3.5" /> Paste
+            </Button>
+            <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+            <Button intent="ghost" size="sm" disabled={!api.canUndo()} onClick={() => void api.undo()} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><Undo2 className="size-3.5" /></Button>
+            <Button intent="ghost" size="sm" disabled={!api.canRedo()} onClick={() => void api.redo()} aria-label="Redo (Ctrl+Y)" title="Redo (Ctrl+Y)"><Redo2 className="size-3.5" /></Button>
+            <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+          </div>
+          {/* filters */}
+          <div className="relative">
+            <Button intent="ghost" size="sm" onClick={() => setFiltersOpen((o) => !o)} aria-expanded={filtersOpen}>
+              <SlidersHorizontal className="size-3.5" /> Filters
+            </Button>
+            {filtersOpen && (
+              <FloatingCard anchor={{ x: window.innerWidth - 380, y: 150 }} width={260} label="View filters" onClose={() => setFiltersOpen(false)}>
+                <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Show event types</p>
+                {([
+                  ['availability', 'Availability', ['available', 'working_hours']],
+                  ['timeoff', 'Time off & unavailability', ['holiday', 'sick_leave', 'personal_appointment', 'out_of_office', 'unavailable_other', 'other']],
+                  ['duty', 'Duty & training', ['on_duty', 'club_duty', 'duty_outside_club', 'working_elsewhere', 'training']],
+                  ['bookings', 'Sessions & tasks', ['session', 'task']],
+                ] as const).map(([key, label, kinds]) => (
+                  <label key={key} className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold hover:bg-surface-hover">
           <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
               <div>
@@ -1141,6 +1269,55 @@ export function Availability() {
                   </select>
                 </div>
 
+      {/* =========================== main grid =========================== */}
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_330px]">
+        <div className="flex min-w-0 flex-col gap-3">
+          {/* conflict strip */}
+          <ConflictStrip
+            conflicts={conflictsInRange}
+            onJump={jumpToConflict}
+            onAcknowledge={(c) => void api.setConflictStatus(c.id!, 'acknowledged')}
+            onResolve={(c) => void api.setConflictStatus(c.id!, 'resolved')}
+          />
+
+          {/* calendar surface */}
+          <div className="min-h-[540px] flex-1">
+            {view === 'day' || (view === 'week' && !isMobile) ? (
+              <TimeGrid
+                days={view === 'day' ? [cursor] : days}
+                events={rangeEvents}
+                staffLanes={staffLanes}
+                workingHours={{ start: settings.startHour, end: settings.endHour }}
+                slotMinutes={settings.slotMinutes}
+                selectedIds={selectedIds}
+                clipboardIds={new Set(clipboard?.cut ? clipboard.ids : [])}
+                onSelect={handleSelect}
+                onCreate={handleCreate}
+                onOpen={handleOpen}
+                onEdit={handleEdit}
+                onMove={(ev, start, end, staffId) => void handleMove(ev, start, end, staffId)}
+                onHeaderClick={(day) => { setCursor(day); setView('day'); }}
+              />
+            ) : view === 'week' && isMobile ? (
+              <div className="card overflow-hidden">
+                <div className="border-b border-line bg-surface-inset/60 px-3 py-2 text-xs font-bold text-ink-muted">
+                  Week overview · tap a day to open the time grid
+                </div>
+                <AgendaView days={days} events={rangeEvents} selectedIds={selectedIds} onSelect={handleSelect} onOpen={handleOpen} onOpenDay={(day) => { setCursor(day); setView('day'); }} />
+              </div>
+            ) : view === 'month' ? (
+              <MonthGrid
+                monthAnchor={cursor}
+                events={rangeEvents}
+                selectedIds={selectedIds}
+                onSelect={handleSelect}
+                onOpen={handleOpen}
+                onOpenDay={(day) => { setCursor(day); setView('day'); }}
+                onMoveDay={(ev, day) => {
+                  if (ev.system) { toast.warning('System bookings move in Scheduling, not the personal diary.'); return; }
+                  const dur = Date.parse(ev.end) - Date.parse(ev.start);
+                  const s = new Date(day); s.setHours(new Date(ev.start).getHours(), new Date(ev.start).getMinutes(), 0, 0);
+                  void handleMove(ev, s, new Date(s.getTime() + dur), ev.staffId);
                 <div>
                   <label className="block text-[11px] font-semibold text-ink-muted mb-1">Status</label>
                   <select

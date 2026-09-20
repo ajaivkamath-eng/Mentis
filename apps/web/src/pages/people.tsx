@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { demoEnabled, isDemoSession } from '../lib/demo';
+import { addDemoCustomer, addDemoMember, demoCustomersSnapshot } from '../lib/people-data';
 import { useAuth } from '../lib/auth';
 import { PageTitle } from '../lib/ui';
 import { validateMember, ageAt } from '@mentis/core';
+
+const demoPeopleMode = () => demoEnabled || isDemoSession();
 
 /* ---------- Member create/edit (under-18 validation blocks save) ---------- */
 export function MemberForm() {
@@ -11,6 +15,10 @@ export function MemberForm() {
   const [form, setForm] = useState({ name: '', dateOfBirth: '', customer_id: '', nokName: '', nokPhone: '', tteNumber: '', handedness: '', playingStyle: '', equipmentNotes: '' });
   const [msg, setMsg] = useState('');
   useEffect(() => {
+    if (demoPeopleMode()) {
+      setCustomers(demoCustomersSnapshot().map((customer) => ({ id: customer.id, name: customer.name })));
+      return;
+    }
     supabase.from('mentis_customers').select('id,name').order('name').then(({ data }) => setCustomers(data ?? []));
   }, []);
   const save = async () => {
@@ -21,6 +29,20 @@ export function MemberForm() {
     });
     if (!form.name.trim()) errs.push('name is required');
     if (errs.length) { setMsg(errs.join(' · ')); return; }
+    if (demoPeopleMode()) {
+      addDemoMember({
+        name: form.name,
+        dateOfBirth: form.dateOfBirth,
+        customerId: form.customer_id || undefined,
+        tteNumber: form.tteNumber || undefined,
+        handedness: (form.handedness as 'L' | 'R') || undefined,
+        playingStyle: form.playingStyle || undefined,
+        equipmentNotes: form.equipmentNotes || undefined,
+      });
+      setMsg(`Added ${form.name} to the demo roster. You can now open their Member 360.`);
+      setForm({ ...form, name: '' });
+      return;
+    }
     const { error } = await supabase.from('mentis_members').insert({
       organization_id: staff?.organization_id, name: form.name, date_of_birth: form.dateOfBirth,
       customer_id: form.customer_id || null, tte_number: form.tteNumber || null,
@@ -67,6 +89,20 @@ export function CustomerForm() {
   const [msg, setMsg] = useState('');
   const save = async () => {
     if (!form.name.trim()) { setMsg('Name is required.'); return; }
+    if (demoPeopleMode()) {
+      addDemoCustomer({
+        name: form.name,
+        phone: form.phone,
+        email: form.email,
+        guardianA: form.guardianA,
+        guardianB: form.guardianB,
+        nokName: form.nokName,
+        nokPhone: form.nokPhone,
+      });
+      setMsg(`Added ${form.name} to the demo directory. You can now link members to this household.`);
+      setForm({ ...form, name: '' });
+      return;
+    }
     const { error } = await supabase.from('mentis_customers').insert({
       organization_id: staff?.organization_id, name: form.name, phone: form.phone || null,
       email: form.email || null, guardian_a: form.guardianA || null, guardian_b: form.guardianB || null,
