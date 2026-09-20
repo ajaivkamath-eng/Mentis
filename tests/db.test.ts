@@ -1,5 +1,6 @@
 /* Database suite: applies every migration to throwaway PGlite Postgres,
- * then runs the RLS matrix + guard tests (supabase/tests/rls_matrix.sql).
+ * then runs the RLS matrix + guard tests (supabase/tests/rls_matrix.sql) and
+ * the session-blueprint suite (supabase/tests/session_templates.sql).
  * Supabase-hosted-only bits (pg_cron/pg_net) are stripped; auth + storage
  * schemas are stubbed the way Supabase provides them. */
 import { describe, it, expect } from 'vitest';
@@ -39,6 +40,10 @@ describe('postgres migrations + RLS matrix', () => {
           $$ select nullif(current_setting('request.jwt.claims', true)::json->>'sub', '')::uuid $$;
         create schema storage;
         create table storage.buckets (id text primary key, name text, public boolean);
+        -- Supabase grants the API roles usage on the auth schema; without it a
+        -- caller who is not the owner cannot reach auth.uid().
+        grant usage on schema auth to authenticated, service_role;
+        grant execute on function auth.uid() to authenticated, service_role;
       `);
       const files = readdirSync(MIG).filter((f) => f.endsWith('.sql')).sort();
       expect(files.length).toBeGreaterThan(0);
@@ -47,8 +52,14 @@ describe('postgres migrations + RLS matrix', () => {
       }
       await db.exec(`grant all on all tables in schema public to authenticated;
         grant usage, select on all sequences in schema public to authenticated;`);
-      // Throws on any matrix violation.
-      await db.exec(readFileSync(resolve(root, 'supabase/tests/rls_matrix.sql'), 'utf8'));
+      // Each suite throws on its first violated invariant. Session settings are
+      // reset between them: a rolled-back `set_config` leaves `request.jwt.claims`
+      // as an empty string, which the stubbed `auth.uid()` cannot cast to json.
+      for (const suite of ['rls_matrix.sql', 'session_templates.sql']) {
+        await db.exec(`select set_config('request.jwt.claims', '{}', false);
+          select set_config('role', 'service_role', false);`);
+        await db.exec(readFileSync(resolve(root, 'supabase/tests', suite), 'utf8'));
+      }
     } finally {
       await db.close();
     }

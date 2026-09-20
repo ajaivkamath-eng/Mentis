@@ -8,6 +8,7 @@ export * from './billing.js';
 export * from './scheduling.js';
 export * from './diary.js';
 export * from './generator.js';
+export * from './templates.js';
 export * from './overrides.js';
 export * from './timesheet.js';
 export * from './offline.js';
