@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSelectedGroupsForPreview } from '../apps/web/src/pages/ops.tsx';
+import { resolveSelectedGroupsForPreview } from '../apps/web/src/pages/ops';
 
 describe('resolveSelectedGroupsForPreview', () => {
   const groups = [
