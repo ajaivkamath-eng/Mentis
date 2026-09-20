@@ -1,6 +1,6 @@
 /* Weekly-schedule generation with holiday exceptions + conflict checks
  * (rules 16–18). Venue concurrency default 1; back-to-back allowed. */
-export type Holiday = { kind: 'term_break' | 'bank_holiday' | 'manual'; startsOn: string; endsOn: string; name?: string };
+export type Holiday = { kind: 'term_break' | 'bank_holiday' | 'manual' | 'term_holiday_week' | 'term_holiday'; startsOn: string; endsOn: string; name?: string };
 export type ScheduleStaff = { staffId: string; capacity: 'lead' | 'assistant' | 'sparrer'; rateCardId?: string };
 export type WeeklySchedule = {
   id: string; venueId: string; dayOfWeek: number; validFrom: string; validTo: string;
@@ -15,6 +15,18 @@ export type Conflict = { type: 'venue' | 'staff'; date: string; message: string;
 const day = (s: string) => new Date(`${s}T00:00:00Z`);
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const inRange = (date: string, h: Holiday) => date >= h.startsOn && date <= h.endsOn;
+export function normalizeHolidayKind(holiday: Pick<Holiday, 'kind' | 'name'> | null | undefined) {
+  if (!holiday) return 'manual';
+
+  const kind = String(holiday.kind ?? '').toLowerCase();
+  const name = String(holiday.name ?? '').toLowerCase();
+
+  if (kind === 'bank_holiday' || kind.includes('bank')) return 'bank_holiday';
+  if (kind === 'term_break' || kind.includes('term') || kind.includes('holiday') || name.includes('term') || name.includes('holiday')) return 'term_break';
+  if (kind === 'manual') return 'manual';
+
+  return 'manual';
+}
 export function generateSchedule(schedule: WeeklySchedule, holidays: Holiday[] = []): GeneratedInstance[] {
   const out: GeneratedInstance[] = [];
   for (const d = day(schedule.validFrom); iso(d) <= schedule.validTo; d.setUTCDate(d.getUTCDate() + 1)) {
