@@ -35,6 +35,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter, ReviewAndConfirmBanner, ConfirmDialog } from '../components/ui/dialog';
 import { demoEnabled } from '../lib/demo';
 import { cn } from '../lib/cn';
+import { explainNoGeneratedDates, explainSessionInsertError } from '../lib/sessionErrors';
 
 // ---------------------------------------------------------------------------
 // Types for the workbook
@@ -53,7 +54,7 @@ type SessionInstance = {
 type Holiday = {
   id: string;
   name: string;
-  kind: 'term_break' | 'bank_holiday' | 'manual';
+  kind: 'term_break' | 'bank_holiday' | 'manual' | 'term_holiday_week' | 'term_holiday';
   starts_on: string;
   ends_on: string;
 };
@@ -187,6 +188,62 @@ function isDateInHolidays(dateStr: string, holidays: Holiday[]): Holiday | null 
   return null;
 }
 
+function normalizeHolidayKind(holiday: Pick<Holiday, 'kind' | 'name'> | null | undefined) {
+  if (!holiday) return 'manual';
+
+  const kind = String(holiday.kind ?? '').toLowerCase();
+  const name = String(holiday.name ?? '').toLowerCase();
+
+  if (kind === 'bank_holiday' || kind.includes('bank')) return 'bank_holiday';
+  if (kind === 'term_break' || kind.includes('term') || kind.includes('holiday') || name.includes('term') || name.includes('holiday')) return 'term_break';
+
+  return 'manual';
+}
+
+function getIsoWeekKey(dateStr: string) {
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  const day = (date.getUTCDay() + 6) % 7;
+  const monday = new Date(date);
+  monday.setUTCDate(date.getUTCDate() - day);
+  return monday.toISOString().slice(0, 10);
+}
+
+export function resolveSelectedGroupsForPreview({
+  groups,
+  selectedGroupKeys,
+  selectedGroupKey,
+  selectedVenue,
+  filteredGroups,
+  selectedGroup,
+  bulkSelectionMode = false,
+}: {
+  groups: SessionGroup[];
+  selectedGroupKeys: string[];
+  selectedGroupKey: string;
+  selectedVenue: string;
+  filteredGroups: SessionGroup[];
+  selectedGroup: SessionGroup | null;
+  bulkSelectionMode?: boolean;
+}) {
+  if (bulkSelectionMode && selectedGroupKeys.length) {
+    return groups.filter(g => selectedGroupKeys.includes(g.key));
+  }
+
+  if (selectedGroupKey && selectedGroup) {
+    return [selectedGroup];
+  }
+
+  if (selectedGroupKeys.length && !selectedGroupKey) {
+    return groups.filter(g => selectedGroupKeys.includes(g.key));
+  }
+
+  if (selectedVenue !== 'all') {
+    return filteredGroups.length ? filteredGroups : (selectedGroup ? [selectedGroup] : []);
+  }
+
+  return filteredGroups;
+}
+
 function formatDateShort(iso: string) {
   const d = new Date(iso);
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
@@ -236,11 +293,18 @@ export function Sessions() {
     skip_bank_holidays: true,
   });
   const [recurrencePreview, setRecurrencePreview] = useState<string[]>([]);
+  const [recurrenceBuckets, setRecurrenceBuckets] = useState<{
+    generated: string[];
+    skippedTerm: string[];
+    skippedBank: string[];
+  }>({ generated: [], skippedTerm: [], skippedBank: [] });
   const [recurrenceSummary, setRecurrenceSummary] = useState<{
     totalGenerated: number;
     skippedBankHolidays: number;
     skippedTermHolidays: number;
     affectedDatesCount: number;
+    weeksCovered: number;
+    venueBreakdown: Array<{ venue: string; generated: number; skippedTerm: number; skippedBank: number }>;
   } | null>(null);
   const [showRecurringConfirm, setShowRecurringConfirm] = useState(false);
   const [showBulkRecurringDialog, setShowBulkRecurringDialog] = useState(false);
@@ -274,9 +338,15 @@ export function Sessions() {
     return groups.find(g => g.key === selectedGroupKey) ?? filteredGroups[0] ?? null;
   }, [groups, selectedGroupKey, filteredGroups]);
 
-  const selectedBulkGroups = useMemo(() => {
-    return groups.filter(g => selectedGroupKeys.includes(g.key));
-  }, [groups, selectedGroupKeys]);
+  const selectedBulkGroups = useMemo(() => resolveSelectedGroupsForPreview({
+    groups,
+    selectedGroupKeys,
+    selectedGroupKey,
+    selectedVenue,
+    filteredGroups,
+    selectedGroup,
+    bulkSelectionMode,
+  }), [groups, selectedGroupKeys, selectedGroupKey, selectedVenue, filteredGroups, selectedGroup, bulkSelectionMode]);
 
   const toggleBulkGroupSelection = (key: string) => {
     setSelectedGroupKeys(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
@@ -337,9 +407,10 @@ export function Sessions() {
       const iso = d.toISOString().slice(0, 10);
       if (d < start || d > end) return;
       const holiday = isDateInHolidays(iso, holidays);
+      const holidayKind = normalizeHolidayKind(holiday);
       const skipThisDate =
-        (recurrenceForm.skip_term_holidays && holiday && holiday.kind === 'term_break') ||
-        (recurrenceForm.skip_bank_holidays && holiday && holiday.kind === 'bank_holiday');
+        (recurrenceForm.skip_term_holidays && holidayKind === 'term_break') ||
+        (recurrenceForm.skip_bank_holidays && holidayKind === 'bank_holiday');
       if (skipThisDate) return;
       out.push(iso);
     };
@@ -380,19 +451,27 @@ export function Sessions() {
   };
 
   const getRecurrencePreviewData = () => {
-    if (!editingSession || !selectedGroup) return { dates: [] as string[], summary: null as {
-      totalGenerated: number;
-      skippedBankHolidays: number;
-      skippedTermHolidays: number;
-      affectedDatesCount: number;
-    } | null };
+    if (!editingSession || !selectedGroup) {
+      return {
+        dates: [] as string[],
+        summary: null as {
+          totalGenerated: number;
+          skippedBankHolidays: number;
+          skippedTermHolidays: number;
+          affectedDatesCount: number;
+          weeksCovered: number;
+          venueBreakdown: Array<{ venue: string; generated: number; skippedTerm: number; skippedBank: number }>;
+        } | null,
+        buckets: { generated: [], skippedTerm: [], skippedBank: [] },
+      };
+    }
 
     const anchor = new Date(editingSession.start_at);
     const targetWeekday = anchor.getDay();
     const start = new Date(recurrenceForm.start_date || editingSession.start_at.slice(0, 10));
     const end = new Date(recurrenceForm.end_date || editingSession.start_at.slice(0, 10));
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
-      return { dates: [], summary: null };
+      return { dates: [], summary: null, buckets: { generated: [], skippedTerm: [], skippedBank: [] } };
     }
 
     const base = new Date(start);
@@ -430,33 +509,50 @@ export function Sessions() {
       }
     }
 
-    const dates = candidates.filter(date => {
+    const generated: string[] = [];
+    const skippedTerm: string[] = [];
+    const skippedBank: string[] = [];
+
+    candidates.forEach(date => {
       const holiday = isDateInHolidays(date, holidays);
-      const skipThisDate =
-        (recurrenceForm.skip_term_holidays && holiday && holiday.kind === 'term_break') ||
-        (recurrenceForm.skip_bank_holidays && holiday && holiday.kind === 'bank_holiday');
-      return !skipThisDate;
+      const holidayKind = normalizeHolidayKind(holiday);
+
+      if (recurrenceForm.skip_term_holidays && holidayKind === 'term_break') {
+        skippedTerm.push(date);
+        return;
+      }
+
+      if (recurrenceForm.skip_bank_holidays && holidayKind === 'bank_holiday') {
+        skippedBank.push(date);
+        return;
+      }
+
+      generated.push(date);
     });
 
-    const skippedBankHolidays = candidates.filter(date => {
-      const holiday = isDateInHolidays(date, holidays);
-      return recurrenceForm.skip_bank_holidays && !!holiday && holiday.kind === 'bank_holiday';
-    }).length;
-
-    const skippedTermHolidays = candidates.filter(date => {
-      const holiday = isDateInHolidays(date, holidays);
-      return recurrenceForm.skip_term_holidays && !!holiday && holiday.kind === 'term_break';
-    }).length;
-
-    const affectedDatesCount = selectedGroup.sessions.filter(s => dates.includes(s.start_at.slice(0, 10))).length;
+    const affectedDatesCount = selectedGroup.sessions.filter(s => generated.includes(s.start_at.slice(0, 10))).length;
+    const venueBreakdown = [{
+      venue: selectedGroup.venue_name || 'Venue',
+      generated: generated.length,
+      skippedTerm: skippedTerm.length,
+      skippedBank: skippedBank.length,
+    }];
+    const weeksCovered = new Set(generated.map(date => getIsoWeekKey(date))).size;
 
     return {
-      dates,
+      dates: generated,
       summary: {
-        totalGenerated: dates.length,
-        skippedBankHolidays,
-        skippedTermHolidays,
+        totalGenerated: generated.length,
+        skippedBankHolidays: skippedBank.length,
+        skippedTermHolidays: skippedTerm.length,
         affectedDatesCount,
+        weeksCovered,
+        venueBreakdown,
+      },
+      buckets: {
+        generated: generated.slice().sort(),
+        skippedTerm: skippedTerm.slice().sort(),
+        skippedBank: skippedBank.slice().sort(),
       },
     };
   };
@@ -464,21 +560,29 @@ export function Sessions() {
   const previewRecurrenceDates = () => {
     const plan = getRecurrencePreviewData();
     setRecurrencePreview(plan.dates);
+    setRecurrenceBuckets(plan.buckets);
     setRecurrenceSummary(plan.summary);
     return plan.dates;
   };
 
   const previewBulkRecurringPattern = () => {
-    const baseGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedGroup ? [selectedGroup] : []);
+    const baseGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedVenue === 'all' ? filteredGroups : (selectedGroup ? [selectedGroup] : []));
     if (!baseGroups.length) {
       setRecurrencePreview([]);
+      setRecurrenceBuckets({ generated: [], skippedTerm: [], skippedBank: [] });
       setRecurrenceSummary(null);
       return [] as string[];
     }
 
     const generated = new Set<string>();
-    let skippedBankHolidays = 0;
-    let skippedTermHolidays = 0;
+    const skippedBank = new Set<string>();
+    const skippedTerm = new Set<string>();
+    const venueMap = new Map<string, { generated: number; skippedTerm: number; skippedBank: number }>();
+
+    baseGroups.forEach(group => {
+      const venueName = group.venue_name || 'Venue';
+      venueMap.set(venueName, venueMap.get(venueName) ?? { generated: 0, skippedTerm: 0, skippedBank: 0 });
+    });
 
     baseGroups.forEach(group => {
       const anchor = group.sessions[0];
@@ -522,31 +626,52 @@ export function Sessions() {
 
       candidateDates.forEach(date => {
         const holiday = isDateInHolidays(date, holidays);
-        const shouldSkip =
-          (recurrenceForm.skip_term_holidays && holiday && holiday.kind === 'term_break') ||
-          (recurrenceForm.skip_bank_holidays && holiday && holiday.kind === 'bank_holiday');
-        if (shouldSkip) {
-          if (holiday && holiday.kind === 'term_break') skippedTermHolidays += 1;
-          if (holiday && holiday.kind === 'bank_holiday') skippedBankHolidays += 1;
+        const holidayKind = normalizeHolidayKind(holiday);
+        const venueName = group.venue_name || 'Venue';
+        const venueSummary = venueMap.get(venueName) ?? { generated: 0, skippedTerm: 0, skippedBank: 0 };
+
+        if (recurrenceForm.skip_term_holidays && holidayKind === 'term_break') {
+          skippedTerm.add(date);
+          venueSummary.skippedTerm += 1;
+          venueMap.set(venueName, venueSummary);
           return;
         }
+
+        if (recurrenceForm.skip_bank_holidays && holidayKind === 'bank_holiday') {
+          skippedBank.add(date);
+          venueSummary.skippedBank += 1;
+          venueMap.set(venueName, venueSummary);
+          return;
+        }
+
         generated.add(date);
+        venueSummary.generated += 1;
+        venueMap.set(venueName, venueSummary);
       });
     });
 
     const dates = Array.from(generated).sort();
+    const termDates = Array.from(skippedTerm).sort();
+    const bankDates = Array.from(skippedBank).sort();
+    const venueBreakdown = Array.from(venueMap.entries()).map(([venue, summary]) => ({ venue, ...summary }));
+    const weeksCovered = new Set(dates.map(date => getIsoWeekKey(date))).size;
+
     setRecurrencePreview(dates);
+    setRecurrenceBuckets({ generated: dates, skippedTerm: termDates, skippedBank: bankDates });
     setRecurrenceSummary({
       totalGenerated: dates.length,
-      skippedBankHolidays,
-      skippedTermHolidays,
+      skippedBankHolidays: bankDates.length,
+      skippedTermHolidays: termDates.length,
       affectedDatesCount: dates.length,
+      weeksCovered,
+      venueBreakdown,
     });
     return dates;
   };
 
   const clearRecurrencePreview = () => {
     setRecurrencePreview([]);
+    setRecurrenceBuckets({ generated: [], skippedTerm: [], skippedBank: [] });
     setRecurrenceSummary(null);
   };
 
@@ -714,7 +839,11 @@ export function Sessions() {
     const previewDates = recurrencePreview.length ? recurrencePreview : previewRecurrenceDates();
     const summary = recurrenceSummary ?? getRecurrencePreviewData().summary;
     if (!previewDates.length || !summary) {
-      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
+      alert(explainNoGeneratedDates({
+        skipBankHolidays: recurrenceForm.skip_bank_holidays,
+        skipTermHolidays: recurrenceForm.skip_term_holidays,
+        range: `${recurrenceForm.start_date || 'selected dates'} to ${recurrenceForm.end_date || 'selected dates'}`,
+      }));
       return;
     }
     setShowRecurringConfirm(true);
@@ -729,7 +858,11 @@ export function Sessions() {
 
     const previewDates = recurrencePreview.length ? recurrencePreview : previewBulkRecurringPattern();
     if (!previewDates.length) {
-      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
+      alert(explainNoGeneratedDates({
+        skipBankHolidays: recurrenceForm.skip_bank_holidays,
+        skipTermHolidays: recurrenceForm.skip_term_holidays,
+        range: `${recurrenceForm.start_date || 'selected dates'} to ${recurrenceForm.end_date || 'selected dates'}`,
+      }));
       return;
     }
 
@@ -785,12 +918,64 @@ export function Sessions() {
     clearBulkSelection();
   };
 
+  const resetSelectedOccurrences = async () => {
+    const targetGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedGroup ? [selectedGroup] : []);
+    if (!targetGroups.length) {
+      alert('Select at least one session group to reset its occurrences.');
+      return;
+    }
+
+    const targetSessionIds = targetGroups.flatMap(group => group.sessions.map(session => session.id));
+    if (!targetSessionIds.length) {
+      alert('No session occurrences were found in the current selection.');
+      return;
+    }
+
+    const confirmText = `Reset ${targetSessionIds.length} occurrences across ${targetGroups.length} selected groups back to their recurring pattern?`;
+    if (!window.confirm(confirmText)) return;
+
+    if (!demoEnabled && staff) {
+      const { error } = await supabase.from('mentis_schedule_overrides').delete().in('session_id', targetSessionIds);
+      if (error) {
+        alert(explainSessionInsertError(error));
+        return;
+      }
+    }
+
+    setGroups(prev => prev.map(group => {
+      const isSelected = targetGroups.some(target => target.key === group.key);
+      if (!isSelected) return group;
+
+      return {
+        ...group,
+        sessions: group.sessions.map(session => {
+          const base = group.sessions.find(candidate => candidate.schedule_id === session.schedule_id && candidate.id !== session.id) ?? group.sessions[0];
+          if (!base) return session;
+          return {
+            ...session,
+            name: base.name,
+            venue_id: base.venue_id,
+            start_at: base.start_at,
+            end_at: base.end_at,
+            status: base.status,
+          };
+        }),
+      };
+    }));
+
+    clearRecurrencePreview();
+  };
+
   const confirmRecurringSeries = async () => {
     if (!selectedGroup || !editingSession) return;
     const previewDates = recurrencePreview.length ? recurrencePreview : previewRecurrenceDates();
     const summary = recurrenceSummary ?? getRecurrencePreviewData().summary;
     if (!previewDates.length || !summary) {
-      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
+      alert(explainNoGeneratedDates({
+        skipBankHolidays: recurrenceForm.skip_bank_holidays,
+        skipTermHolidays: recurrenceForm.skip_term_holidays,
+        range: `${recurrenceForm.start_date || 'selected dates'} to ${recurrenceForm.end_date || 'selected dates'}`,
+      }));
       return;
     }
 
@@ -1182,9 +1367,14 @@ export function Sessions() {
             )}
           </div>
           {selectedBulkGroups.length > 0 && (
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowBulkRecurringDialog(true)}>
-              Apply common recurring pattern ({selectedBulkGroups.length})
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowBulkRecurringDialog(true)}>
+                Apply common recurring pattern ({selectedBulkGroups.length})
+              </button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={resetSelectedOccurrences}>
+                Reset selected occurrences
+              </button>
+            </div>
           )}
         </div>
         <div className="flex items-center justify-between border-b border-line bg-surface-inset/50 px-3 py-2">
@@ -1227,6 +1417,7 @@ export function Sessions() {
                       toggleBulkGroupSelection(g.key);
                       return;
                     }
+                    setSelectedGroupKeys([]);
                     setSelectedGroupKey(g.key);
                   }}
                   className={cn(
@@ -1747,32 +1938,71 @@ export function Sessions() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <button className="btn btn-ghost" onClick={previewBulkRecurringPattern}>Preview generated dates</button>
                 <button className="btn btn-primary" onClick={applyBulkRecurringPattern} disabled={!recurrencePreview.length}>Apply common pattern</button>
+                <button className="btn btn-secondary" onClick={resetSelectedOccurrences} disabled={!selectedBulkGroups.length && !selectedGroup}>Reset selected occurrences</button>
               </div>
               {recurrenceSummary && recurrencePreview.length > 0 && (
-                <div className="mt-3 rounded-lg border border-line bg-surface p-3">
-                  <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Preview summary</div>
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Generated</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.totalGenerated}</div>
+                <div className="mt-3 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4">
+                  <div className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Preview summary</div>
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-500">Generated across</div>
+                      <div className="mt-1 text-2xl font-black text-slate-900">{recurrenceSummary.weeksCovered} weeks</div>
                     </div>
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped bank holidays</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedBankHolidays}</div>
-                    </div>
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped term breaks</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedTermHolidays}</div>
-                    </div>
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Affected dates</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.affectedDatesCount}</div>
+
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">Venue totals</div>
+                      <div className="space-y-2">
+                        {recurrenceSummary.venueBreakdown.length ? recurrenceSummary.venueBreakdown.map(item => (
+                          <div key={item.venue} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                            <span className="font-semibold text-slate-700">{item.venue}</span>
+                            <span className="font-black text-slate-900">{item.generated} sessions</span>
+                          </div>
+                        )) : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] italic text-slate-500">No venue totals yet</div>}
+                        {(() => {
+                          const readingBreakdown = recurrenceSummary.venueBreakdown.filter(item => /reading.*school/i.test(item.venue));
+                          const readingTotal = readingBreakdown.reduce((sum, item) => sum + item.generated, 0);
+                          return readingTotal > 0 || readingBreakdown.length > 0 ? (
+                            <div className="flex items-center justify-between gap-3 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm">
+                              <span className="font-semibold text-sky-800">Reading School stats</span>
+                              <span className="font-black text-sky-900">{readingTotal} sessions</span>
+                            </div>
+                          ) : null;
+                        })()}
+                        <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
+                          <span className="font-semibold text-emerald-800">Total</span>
+                          <span className="font-black text-emerald-900">{recurrenceSummary.totalGenerated} sessions</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {recurrencePreview.map(date => (
-                      <span key={date} className="rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-medium text-ink">{date}</span>
-                    ))}
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="rounded-md border border-emerald-300 bg-emerald-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-emerald-700">Generated sessions</div>
+                      <div className="mt-1 text-lg font-bold text-emerald-800">{recurrenceSummary.totalGenerated}</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {recurrenceBuckets.generated.length ? recurrenceBuckets.generated.map(date => (
+                          <span key={date} className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-1 text-[10px] font-medium text-emerald-800">{date}</span>
+                        )) : <span className="text-[10px] italic text-emerald-700">None</span>}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-red-300 bg-red-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-red-700">Skipped term breaks</div>
+                      <div className="mt-1 text-lg font-bold text-red-800">{recurrenceSummary.skippedTermHolidays}</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {recurrenceBuckets.skippedTerm.length ? recurrenceBuckets.skippedTerm.map(date => (
+                          <span key={date} className="rounded-full border border-red-300 bg-red-100 px-2 py-1 text-[10px] font-medium text-red-800">{date}</span>
+                        )) : <span className="text-[10px] italic text-red-700">None</span>}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-amber-300 bg-amber-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-amber-700">Skipped bank holidays</div>
+                      <div className="mt-1 text-lg font-bold text-amber-800">{recurrenceSummary.skippedBankHolidays}</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {recurrenceBuckets.skippedBank.length ? recurrenceBuckets.skippedBank.map(date => (
+                          <span key={date} className="rounded-full border border-amber-300 bg-amber-100 px-2 py-1 text-[10px] font-medium text-amber-800">{date}</span>
+                        )) : <span className="text-[10px] italic text-amber-700">None</span>}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1906,31 +2136,68 @@ export function Sessions() {
               </div>
 
               {recurrenceSummary && recurrencePreview.length > 0 && (
-                <div className="mt-3 rounded-lg border border-line bg-surface p-3">
-                  <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Preview summary</div>
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Generated</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.totalGenerated}</div>
+                <div className="mt-3 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4">
+                  <div className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Preview summary</div>
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-500">Generated across</div>
+                      <div className="mt-1 text-2xl font-black text-slate-900">{recurrenceSummary.weeksCovered} weeks</div>
                     </div>
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped bank holidays</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedBankHolidays}</div>
-                    </div>
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Skipped term breaks</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.skippedTermHolidays}</div>
-                    </div>
-                    <div className="rounded-md border border-line bg-surface-inset p-2">
-                      <div className="text-[10px] uppercase tracking-wide text-ink-faint">Affected dates</div>
-                      <div className="mt-1 text-lg font-bold text-ink">{recurrenceSummary.affectedDatesCount}</div>
+
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">Venue totals</div>
+                      <div className="space-y-2">
+                        {recurrenceSummary.venueBreakdown.length ? recurrenceSummary.venueBreakdown.map(item => (
+                          <div key={item.venue} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                            <span className="font-semibold text-slate-700">{item.venue}</span>
+                            <span className="font-black text-slate-900">{item.generated} sessions</span>
+                          </div>
+                        )) : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] italic text-slate-500">No venue totals yet</div>}
+                        {(() => {
+                          const readingBreakdown = recurrenceSummary.venueBreakdown.filter(item => /reading.*school/i.test(item.venue));
+                          const readingTotal = readingBreakdown.reduce((sum, item) => sum + item.generated, 0);
+                          return readingTotal > 0 || readingBreakdown.length > 0 ? (
+                            <div className="flex items-center justify-between gap-3 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm">
+                              <span className="font-semibold text-sky-800">Reading School stats</span>
+                              <span className="font-black text-sky-900">{readingTotal} sessions</span>
+                            </div>
+                          ) : null;
+                        })()}
+                        <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
+                          <span className="font-semibold text-emerald-800">Total</span>
+                          <span className="font-black text-emerald-900">{recurrenceSummary.totalGenerated} sessions</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div className="mt-3 text-[11px] font-medium text-ink-faint">Dates to apply</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {recurrencePreview.map(date => (
-                      <span key={date} className="rounded-full border border-line bg-surface-inset px-2 py-1 text-[10px] font-medium text-ink">{date}</span>
-                    ))}
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="rounded-md border border-emerald-300 bg-emerald-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-emerald-700">Generated sessions</div>
+                      <div className="mt-1 text-lg font-bold text-emerald-800">{recurrenceSummary.totalGenerated}</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {recurrenceBuckets.generated.length ? recurrenceBuckets.generated.map(date => (
+                          <span key={date} className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-1 text-[10px] font-medium text-emerald-800">{date}</span>
+                        )) : <span className="text-[10px] italic text-emerald-700">None</span>}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-red-300 bg-red-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-red-700">Skipped term breaks</div>
+                      <div className="mt-1 text-lg font-bold text-red-800">{recurrenceSummary.skippedTermHolidays}</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {recurrenceBuckets.skippedTerm.length ? recurrenceBuckets.skippedTerm.map(date => (
+                          <span key={date} className="rounded-full border border-red-300 bg-red-100 px-2 py-1 text-[10px] font-medium text-red-800">{date}</span>
+                        )) : <span className="text-[10px] italic text-red-700">None</span>}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-amber-300 bg-amber-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-amber-700">Skipped bank holidays</div>
+                      <div className="mt-1 text-lg font-bold text-amber-800">{recurrenceSummary.skippedBankHolidays}</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {recurrenceBuckets.skippedBank.length ? recurrenceBuckets.skippedBank.map(date => (
+                          <span key={date} className="rounded-full border border-amber-300 bg-amber-100 px-2 py-1 text-[10px] font-medium text-amber-800">{date}</span>
+                        )) : <span className="text-[10px] italic text-amber-700">None</span>}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2161,7 +2428,7 @@ export function Scheduling() {
 
   const create = async () => {
     const { error } = await supabase.from('mentis_weekly_schedules').insert({ organization_id: staff?.organization_id, ...form });
-    if (error) alert(error.message); else { setForm({ ...form, name: '' }); load(); }
+    if (error) alert(explainSessionInsertError(error)); else { setForm({ ...form, name: '' }); load(); }
   };
 
   const saveSession = async () => {
@@ -2185,13 +2452,13 @@ export function Scheduling() {
     if (editingSessionId) {
       const { error } = await supabase.from('mentis_sessions').update(payload).eq('id', editingSessionId);
       if (error) {
-        alert(error.message);
+        alert(explainSessionInsertError(error));
         return;
       }
     } else {
       const { error } = await supabase.from('mentis_sessions').insert(payload);
       if (error) {
-        alert(error.message);
+        alert(explainSessionInsertError(error));
         return;
       }
     }
