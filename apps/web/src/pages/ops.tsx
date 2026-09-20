@@ -25,6 +25,7 @@ import {
   CheckCheck,
   UserPlus,
   Pencil,
+  Layers,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
@@ -1280,6 +1281,10 @@ export function Sessions() {
             <Button intent="secondary" size="sm" iconLeft={<Download className="size-4" />} onClick={exportCsv} disabled={!selectedGroup}>
               Export CSV
             </Button>
+            <Link to="/templates" className="btn btn-ghost btn-sm">
+              <Layers className="size-4" />
+              Blueprints
+            </Link>
             <Link to="/scheduling" className="btn btn-ghost btn-sm">
               <Timer className="size-4" />
               Scheduling
@@ -1287,6 +1292,18 @@ export function Sessions() {
           </div>
         }
       />
+
+      {/* Blueprints are the source of truth for what a session is; the recurring
+          helpers below clone an existing instance, which is the legacy path. */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-inset/60 px-3 py-2 text-xs text-ink-muted">
+        <Layers className="size-3.5 text-brand" aria-hidden />
+        <span>
+          Schedules should be authored once as a <strong className="font-semibold text-ink">blueprint</strong> — venue,
+          staffing plan and roster — then published as a recurring series. The recurrence tools here still work, but they
+          clone a single session row.
+        </span>
+        <Link to="/templates" className="btn btn-ghost btn-sm">Open blueprints</Link>
+      </div>
 
       {/* Venue Workbook Tabs - Top level grouping */}
       <div className="card p-2">
@@ -2592,6 +2609,7 @@ export function Scheduling() {
             >
               {showNewScheduling ? 'Close' : 'New Scheduling'}
             </button>
+            <Link to="/templates" className="btn btn-ghost">Blueprints</Link>
             <Link to="/overrides" className="btn btn-ghost">Overrides</Link>
           </div>
         }

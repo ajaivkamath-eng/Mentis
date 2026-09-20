@@ -5,6 +5,7 @@ import { Login, Dashboard, SearchPage, Users, Settings, Reports } from './pages/
 import { Today, Register, Feedback } from './pages/coaching';
 import { Members, Member360, Customers, Tasters } from './pages/entities';
 import { Sessions, Scheduling, Tasks, Inbox } from './pages/ops';
+import { SessionTemplates } from './pages/templates';
 import { Billing, Timesheet, Charges, Reconciliation } from './pages/billing';
 import { Events, MatchEntry, RankingEntry, Goals, Analytics } from './pages/comp';
 import { PublicTaster, PublicDiary, Microflow, Booking12 } from './pages/public';
@@ -59,6 +60,7 @@ export default function App() {
             <Route path="/tasters" element={P('tasters.manage', <Tasters />)} />
             <Route path="/sessions" element={P('sessions.manage', <Sessions />)} />
             <Route path="/scheduling" element={P('sessions.manage', <Scheduling />)} />
+            <Route path="/templates" element={P('sessions.manage', <SessionTemplates />)} />
             <Route path="/overrides" element={P('sessions.manage', <Overrides />)} />
             <Route path="/holidays" element={P('sessions.manage', <Holidays />)} />
             <Route path="/diary-manage" element={P('diary.manage', <DiaryCalendar />)} />
