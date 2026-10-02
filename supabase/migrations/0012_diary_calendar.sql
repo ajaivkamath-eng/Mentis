@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0012_diary_calendar.sql';
+END $$;
+
+
 -- 0012_diary_calendar.sql
 -- Calendar-first coach diary:
 --   * richer availability vocabulary (sick leave, personal appointment, training…)
@@ -10,14 +16,17 @@
 -- 1. Extend the availability vocabulary --------------------------------------
 do $$ begin
   if exists (select 1 from pg_type where typname = 'staff_availability_type') then
-    alter type staff_availability_type add value if not exists 'sick_leave' after 'unavailable_other';
+    alter type staff_availability_type add value if not exists 'vacation' after 'on_duty';
+    alter type staff_availability_type add value if not exists 'holiday' after 'vacation';
+    alter type staff_availability_type add value if not exists 'duty_outside_club' after 'vacation';
+    alter type staff_availability_type add value if not exists 'sick_leave' after 'duty_outside_club';
     alter type staff_availability_type add value if not exists 'working_elsewhere' after 'sick_leave';
     alter type staff_availability_type add value if not exists 'personal_appointment' after 'working_elsewhere';
     alter type staff_availability_type add value if not exists 'training' after 'personal_appointment';
     alter type staff_availability_type add value if not exists 'club_duty' after 'training';
     alter type staff_availability_type add value if not exists 'out_of_office' after 'club_duty';
-    alter type staff_availability_type add value if not exists 'working_hours' after 'out_of_office';
-    alter type staff_availability_type add value if not exists 'other' after 'out_of_office';
+    alter type staff_availability_type add value if not exists 'working_hours' after 'available';
+    alter type staff_availability_type add value if not exists 'other' after 'unavailable_other';
   end if;
 end $$;
 
@@ -81,19 +90,19 @@ create or replace function guard_availability_pattern() returns trigger language
 declare win jsonb; day jsonb; s text; e text;
 begin
   if jsonb_typeof(new.pattern) <> 'array' then
-    raise exception 'availability pattern must be an array of weekday windows';
+    raise exception '%: availability pattern must be an array of weekday windows', '0012_diary_calendar.sql';
   end if;
   for day in select * from jsonb_array_elements(new.pattern) loop
     if (day->>'weekday')::int not between 1 and 7 then
-      raise exception 'weekday must be 1 (Monday) … 7 (Sunday)';
+      raise exception '%: weekday must be 1 (Monday) … 7 (Sunday)', '0012_diary_calendar.sql';
     end if;
     if jsonb_typeof(day->'windows') <> 'array' then
-      raise exception 'each weekday needs a windows array (may be empty)';
+      raise exception '%: each weekday needs a windows array (may be empty)', '0012_diary_calendar.sql';
     end if;
     for win in select * from jsonb_array_elements(day->'windows') loop
       s := win->>'start'; e := win->>'end';
       if s is null or e is null or s !~ '^\d{2}:\d{2}$' or e !~ '^\d{2}:\d{2}$' or e <= s then
-        raise exception 'window %–% is not a valid HH:MM range', coalesce(s,'?'), coalesce(e,'?');
+        raise exception '%: window %–% is not a valid HH:MM range', '0012_diary_calendar.sql', coalesce(s,'?'), coalesce(e,'?');
       end if;
     end loop;
   end loop;
@@ -132,6 +141,11 @@ create unique index if not exists diary_conflict_unique
 alter table mentis_availability_rules enable row level security;
 alter table mentis_diary_conflicts enable row level security;
 
+drop policy if exists rule_select on mentis_availability_rules;
+drop policy if exists rule_write on mentis_availability_rules;
+drop policy if exists conflict_select on mentis_diary_conflicts;
+drop policy if exists conflict_write on mentis_diary_conflicts;
+
 create policy rule_select on mentis_availability_rules for select using (is_staff(organization_id));
 create policy rule_write on mentis_availability_rules for all using (
   is_admin(organization_id) or staff_id = my_staff_id(organization_id) or
@@ -153,7 +167,8 @@ create or replace function availability_kind_label(kind text) returns text langu
     when 'working_hours' then 'Regular working hours'
     when 'on_duty' then 'Club duty'
     when 'club_duty' then 'Club duty'
-    when 'holiday' then 'Holiday / annual leave'
+    when 'vacation' then 'Vacation'
+    when 'holiday' then 'Vacation'
     when 'sick_leave' then 'Sick leave'
     when 'duty_outside_club' then 'Duty outside club'
     when 'working_elsewhere' then 'Working elsewhere'
@@ -198,8 +213,14 @@ begin
       to_char(new.starts_at, 'HH24:MI'), to_char(new.ends_at, 'HH24:MI'),
       availability_kind_label(kind), row.session_name, overlap);
     insert into mentis_diary_conflicts (organization_id, staff_id, availability_id, session_id, staffing_id, overlap_minutes, message)
-      values (org, new.staff_id, new.id, row.session_id, row.staffing_id, overlap, msg)
-      on conflict do nothing;
+      select org, new.staff_id, new.id, row.session_id, row.staffing_id, overlap, msg
+      where not exists (
+        select 1 from mentis_diary_conflicts c
+        where c.availability_id = new.id
+          and c.session_id = row.session_id
+          and c.staffing_id = row.staffing_id
+          and c.status <> 'resolved'
+      );
     update mentis_staff_availability set conflict_status = 'open' where id = new.id;
     if exists (select 1 from mentis_action_types where organization_id = org) then
       insert into mentis_pending_actions (organization_id, action_type_id, title, status, due_at, linked_entity_type, linked_entity_id)
@@ -257,7 +278,7 @@ begin
     select 1 from mentis_staff st
     where st.id = new.staff_id and st.organization_id = new.organization_id
   ) then
-    raise exception 'staff member does not belong to this organisation';
+    raise exception '%: staff member does not belong to this organisation', '0012_diary_calendar.sql';
   end if;
 
   if new.session_id is not null then
@@ -266,13 +287,13 @@ begin
         and planned_start <= new.starts_at and new.ends_at <= planned_end
       order by planned_start limit 1;
     if assignment.id is null then
-      raise exception 'chargeable time must fall inside an assigned staffing window for this session';
+      raise exception '%: chargeable time must fall inside an assigned staffing window for this session', '0012_diary_calendar.sql';
     end if;
   elsif new.task_id is not null then
     if not exists (
       select 1 from mentis_tasks t where t.id = new.task_id and t.assignee_id = new.staff_id
     ) then
-      raise exception 'chargeable task time requires an assignment for this staff member';
+      raise exception '%: chargeable task time requires an assignment for this staff member', '0012_diary_calendar.sql';
     end if;
   end if;
 
@@ -283,7 +304,7 @@ begin
         and valid_from <= (new.starts_at at time zone 'UTC')::date
       order by valid_from desc limit 1;
     if card.id is null then
-      raise exception 'no rate card covers % at rate % for this staff member', new.starts_at::date, new.rate_cents;
+      raise exception '%: no rate card covers % at rate % for this staff member', '0012_diary_calendar.sql', new.starts_at::date, new.rate_cents;
     end if;
   end if;
 
@@ -295,7 +316,7 @@ begin
       and coalesce(session_id, task_id) = coalesce(new.session_id, new.task_id)
       and tsrange(starts_at, ends_at) && tsrange(new.starts_at, new.ends_at);
   if dup > 0 then
-    raise exception 'an overlapping time window is already invoiced for this assignment';
+    raise exception '%: an overlapping time window is already invoiced for this assignment', '0012_diary_calendar.sql';
   end if;
   return new;
 end $$;
@@ -318,3 +339,4 @@ create trigger audit_availability_entry after insert or update or delete on ment
 select cron.schedule('mentis-diary-conflict-escalation', '0 7 * * *',
   $$ select net.http_post('https://project.functions.supabase.co/diary-conflicts',
     '{}', '{"Content-Type":"application/json"}') $$) where false;
+

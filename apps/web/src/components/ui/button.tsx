@@ -52,6 +52,8 @@ export interface ButtonProps
   asChild?: boolean;
   /** Shows a spinner and blocks interaction. */
   loading?: boolean;
+  /** Use the destructive danger styling without leaking an invalid DOM attribute. */
+  destructive?: boolean;
   iconLeft?: ReactNode;
   iconRight?: ReactNode;
   ref?: Ref<HTMLButtonElement>;
@@ -64,6 +66,7 @@ export function Button({
   block,
   asChild,
   loading = false,
+  destructive = false,
   iconLeft,
   iconRight,
   children,
@@ -72,7 +75,8 @@ export function Button({
   ...props
 }: ButtonProps) {
   const reduce = useReducedMotion();
-  const classes = cn(buttonVariants({ intent, size, block }), className);
+  const effectiveIntent = destructive ? 'danger' : intent;
+  const classes = cn(buttonVariants({ intent: effectiveIntent, size, block }), className);
 
   const inner = (
     <>

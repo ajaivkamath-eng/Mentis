@@ -46,7 +46,7 @@ export interface EditorDraft {
 
 const KIND_GROUPS: { group: string; kinds: EventKind[] }[] = [
   { group: 'Availability', kinds: ['available', 'working_hours'] },
-  { group: 'Time off', kinds: ['holiday', 'sick_leave', 'personal_appointment', 'out_of_office', 'unavailable_other'] },
+  { group: 'Time off', kinds: ['vacation', 'sick_leave', 'personal_appointment', 'out_of_office', 'unavailable_other'] },
   { group: 'Duty & development', kinds: ['club_duty', 'duty_outside_club', 'working_elsewhere', 'training'] },
 ];
 
@@ -282,7 +282,7 @@ export function EventEditorPanel({
 /* Quick create popover (after click / drag on empty space)            */
 /* ------------------------------------------------------------------ */
 
-const QUICK_KINDS: EventKind[] = ['available', 'holiday', 'unavailable_other', 'personal_appointment', 'club_duty', 'training'];
+const QUICK_KINDS: EventKind[] = ['available', 'vacation', 'unavailable_other', 'personal_appointment', 'club_duty', 'training'];
 
 export function QuickCreatePopover({
   anchor, range, draft, onChange, onSave, onMoreDetails, staffName,

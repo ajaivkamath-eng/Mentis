@@ -1,5 +1,5 @@
 /**
- * Session blueprints — page tests.
+ * Program blueprints — page tests.
  *
  * Runs against the design-review demo store, so the assertions exercise the
  * real screen: the blueprint rail and detail, the instance provenance table,
@@ -57,9 +57,9 @@ function renderPage() {
 
 /** Open the publish dialog from the blueprint detail header. */
 async function openPublish(user: ReturnType<typeof userEvent.setup>) {
-  const buttons = await screen.findAllByRole('button', { name: /publish series/i });
+  const buttons = await screen.findAllByRole('button', { name: /publish session/i });
   await user.click(buttons[0]);
-  return screen.findByText('Publish a series');
+  return screen.findByText('Publish a session');
 }
 
 /** Pin the rule to a deterministic window so the preview can be asserted. */
@@ -73,11 +73,11 @@ function selectWeekday(name: string) {
   if (!button.className.includes('btn-primary')) fireEvent.click(button);
 }
 
-describe('session blueprints page', () => {
+describe('program blueprints page', () => {
   it('lists blueprints with the facts a session is copied from', async () => {
     renderPage();
 
-    expect(await screen.findByRole('heading', { name: 'Session blueprints' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Program blueprints' })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'U13 Development' })).toBeInTheDocument();
     expect(screen.getByText('U13-MON')).toBeInTheDocument();
     expect(screen.getAllByText('Kingfisher Hall A').length).toBeGreaterThan(0);
@@ -104,8 +104,21 @@ describe('session blueprints page', () => {
     expect(within(instances).getAllByText(/field\(s\) off blueprint/).length).toBeGreaterThan(0);
     expect(within(instances).getAllByRole('button', { name: /re-apply/i }).length).toBeGreaterThan(0);
     // …and the series warns that it carries edited occurrences.
-    const series = screen.getByRole('heading', { name: 'Series' }).closest('.card') as HTMLElement;
+    const series = screen.getByRole('heading', { name: 'Sessions' }).closest('.card') as HTMLElement;
     expect(within(series).getAllByText('1 edited').length).toBeGreaterThan(0);
+  });
+
+  it('offers delete-all and date-range deletion for a published series', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const seriesCard = screen.getByRole('heading', { name: 'Sessions' }).closest('.card') as HTMLElement;
+    const deleteButtons = await within(seriesCard).findAllByRole('button', { name: /delete/i });
+    await user.click(deleteButtons[0]);
+
+    expect(await screen.findByText('Delete session occurrences')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /delete all occurrences/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /delete selected range/i }).length).toBeGreaterThan(0);
   });
 
   it('previews a term of Mondays with the half-term break skipped', async () => {
@@ -159,8 +172,8 @@ describe('session blueprints page', () => {
     authState.canManage = false;
     try {
       renderPage();
-      expect(await screen.findByText('Blueprints are an admin tool')).toBeInTheDocument();
-      expect(screen.queryByRole('heading', { name: 'Session blueprints' })).not.toBeInTheDocument();
+      expect(await screen.findByText('Program blueprints are an admin tool')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Program blueprints' })).not.toBeInTheDocument();
     } finally {
       authState.canManage = true;
     }

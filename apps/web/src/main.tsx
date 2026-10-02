@@ -55,21 +55,6 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
   }
 }
 
-/* Fade the first-paint splash out once React has taken over. */
-const boot = document.getElementById('boot');
-if (boot) {
-  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  if (reduce) {
-    boot.remove();
-  } else {
-    boot.style.transition = 'opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1)';
-    requestAnimationFrame(() => {
-      boot.style.opacity = '0';
-      window.setTimeout(() => boot.remove(), 240);
-    });
-  }
-}
-
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>

@@ -8,18 +8,18 @@ BEGIN;
 DELETE FROM public.mentis_enrollments e
 WHERE e.session_id IN (
   SELECT s.id
-  FROM public.mentis_sessions s
+  FROM public.mentis_session_occurrences s
   WHERE s.organization_id = '00000000-0000-0000-0000-000000000001'
 );
 
 DELETE FROM public.mentis_attendance_records ar
 WHERE ar.session_id IN (
   SELECT s.id
-  FROM public.mentis_sessions s
+  FROM public.mentis_session_occurrences s
   WHERE s.organization_id = '00000000-0000-0000-0000-000000000001'
 );
 
-DELETE FROM public.mentis_sessions
+DELETE FROM public.mentis_session_occurrences
 WHERE organization_id = '00000000-0000-0000-0000-000000000001';
 
 -- Remove imported members created by the roster.
@@ -42,7 +42,7 @@ COMMIT;
 -- BEGIN;
 -- TRUNCATE TABLE public.mentis_enrollments,
 --   public.mentis_attendance_records,
---   public.mentis_sessions,
+--   public.mentis_session_occurrences,
 --   public.mentis_members,
 --   public.mentis_venues,
 --   public.mentis_organizations

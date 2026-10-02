@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0013_session_templates.sql';
+END $$;
+
+
 -- ============================================================================
 -- 0013_session_templates.sql
 --
@@ -8,12 +14,13 @@
 -- mentis_weekly_schedules (a day-of-week + time row). Both made the instance
 -- the source of truth.
 --
--- This migration introduces the missing entity: a session template (blueprint)
+-- This migration introduces the missing entity: a program blueprint
 -- that owns venue, slot, time zone, capacity, coaching trio, a staffing plan
 -- and a default roster. One-off sessions are single instances of it; recurring
--- runs are a recurrence rule materialised into a session_series. Instances stay
--- mentis_sessions rows, so every existing reader (register, diary, invoices,
--- staffing, dashboards) keeps working unchanged.
+-- program runs are materialised from a recurrence rule (legacy name:
+-- mentis_session_series). The dated execution rows stay in mentis_sessions, so
+-- every existing reader (register, diary, invoices, staffing, dashboards) keeps
+-- working unchanged.
 --
 -- Layer 1  tables  : mentis_session_templates (+_staffing, +_members),
 --                    mentis_recurrence_rules, mentis_session_series and the
@@ -30,6 +37,16 @@
 --                    carry schedule_id are linked automatically.
 -- Layer 5  views   : session_template_overview, session_series_overview.
 -- Layer 6  rls     : staff read the blueprint library, admins author it.
+--
+-- Operating model (final canonical structure):
+--   Program blueprint (starts at version 1) -> mentis_session_templates
+--   Program (a concrete run or season)      -> mentis_session_series
+--   Session (each actual dated execution)   -> mentis_sessions (series_id + occurrence_date)
+--   A program is created deliberately when a new run starts; the session rows are
+--   the actual booked/attended execution records for those dates. Each program can
+--   generate sessions in bulk (instantiate_session_series with valid_from/valid_to)
+--   or one at a time (instantiate_session with series_id). Bank holidays and term
+--   breaks are skipped.
 --
 -- Generation semantics (identical in the TypeScript mirror in
 -- packages/core/src/templates.ts, asserted by tests/templates.test.ts):
@@ -150,8 +167,10 @@ comment on table mentis_recurrence_rules is
 
 create index if not exists recurrence_rules_template_idx on mentis_recurrence_rules (template_id);
 
--- A published run of a blueprint. Instances point back at the series, which is
--- what "extend / pause / end the series" acts on — never the blueprint.
+-- A published run of a blueprint. A program blueprint can spawn many sessions,
+-- and each generated program points back at its primary session. The optional
+-- link table below is only for cross-context metadata; it is not the recurrence
+-- source of truth.
 create table if not exists mentis_session_series (
   id                 uuid primary key default gen_random_uuid(),
   organization_id    uuid not null references mentis_organizations(id) on delete cascade,
@@ -170,10 +189,23 @@ create table if not exists mentis_session_series (
 );
 
 comment on table mentis_session_series is
-  'A published run of a blueprint. Instances carry series_id; extending or ending a series never edits the blueprint.';
+  'A published run of a blueprint. Each generated session stores its primary series_id; recurrence, extension, and pausing act on this canonical relationship.';
+
+create table if not exists mentis_session_series_links (
+  series_id       uuid not null references mentis_session_series(id) on delete cascade,
+  session_id      uuid not null references mentis_sessions(id) on delete cascade,
+  occurrence_date date,
+  primary key (series_id, session_id)
+);
+
+comment on table mentis_session_series_links is
+  'Optional association table for auxiliary cross-context links. The recurrence contract still lives on mentis_sessions.series_id.';
 
 create index if not exists session_series_template_idx on mentis_session_series (template_id, status);
 create index if not exists session_series_org_idx on mentis_session_series (organization_id, starts_on desc);
+create unique index if not exists session_series_template_season_uidx on mentis_session_series (template_id, starts_on);
+create index if not exists session_series_links_session_idx on mentis_session_series_links (session_id, series_id);
+create index if not exists session_series_links_occurrence_idx on mentis_session_series_links (series_id, occurrence_date);
 
 -- Provenance on the instances themselves.
 alter table mentis_sessions
@@ -193,6 +225,102 @@ comment on column mentis_sessions.overridden_fields is
 create index if not exists sessions_series_occurrence_idx on mentis_sessions (series_id, occurrence_date);
 create index if not exists sessions_template_idx on mentis_sessions (template_id, start_at);
 create index if not exists sessions_series_idx on mentis_sessions (series_id, start_at);
+
+-- Back-compat for legacy callers/tests that still refer to a dedicated
+-- mentis_session_occurrences table. The canonical storage remains
+-- mentis_sessions, but this view keeps older SQL working while preserving the
+-- template/series provenance model.
+create or replace view public.mentis_session_occurrences as
+select
+  id,
+  organization_id,
+  venue_id,
+  name,
+  start_at,
+  end_at,
+  status,
+  cancel_reason,
+  schedule_id,
+  template_id,
+  series_id,
+  occurrence_date,
+  blueprint,
+  is_exception,
+  overridden_fields,
+  generated_at
+from public.mentis_sessions;
+
+create or replace function public.mentis_session_occurrences_compat() returns trigger
+language plpgsql as $$
+begin
+  if TG_OP = 'INSERT' then
+    insert into public.mentis_sessions (
+      id,
+      organization_id,
+      venue_id,
+      name,
+      start_at,
+      end_at,
+      status,
+      cancel_reason,
+      schedule_id,
+      template_id,
+      series_id,
+      occurrence_date,
+      blueprint,
+      is_exception,
+      overridden_fields,
+      generated_at
+    ) values (
+      coalesce(new.id, gen_random_uuid()),
+      new.organization_id,
+      new.venue_id,
+      new.name,
+      new.start_at,
+      new.end_at,
+      coalesce(new.status, 'scheduled'),
+      new.cancel_reason,
+      new.schedule_id,
+      new.template_id,
+      new.series_id,
+      new.occurrence_date,
+      new.blueprint,
+      coalesce(new.is_exception, false),
+      coalesce(new.overridden_fields, '{}'),
+      new.generated_at
+    )
+    returning id into new.id;
+    return new;
+  elsif TG_OP = 'UPDATE' then
+    update public.mentis_sessions set
+      organization_id = new.organization_id,
+      venue_id = new.venue_id,
+      name = new.name,
+      start_at = new.start_at,
+      end_at = new.end_at,
+      status = new.status,
+      cancel_reason = new.cancel_reason,
+      schedule_id = new.schedule_id,
+      template_id = new.template_id,
+      series_id = new.series_id,
+      occurrence_date = new.occurrence_date,
+      blueprint = new.blueprint,
+      is_exception = new.is_exception,
+      overridden_fields = new.overridden_fields,
+      generated_at = new.generated_at
+    where id = old.id;
+    return new;
+  elsif TG_OP = 'DELETE' then
+    delete from public.mentis_sessions where id = old.id;
+    return old;
+  end if;
+
+  return null;
+end $$;
+
+create trigger mentis_session_occurrences_compat_iud
+instead of insert or update or delete on public.mentis_session_occurrences
+for each row execute function public.mentis_session_occurrences_compat();
 
 -- Blueprint version bump on material edits: instances generated afterwards are
 -- visibly newer than the ones that came before, without rewriting history.
@@ -261,7 +389,7 @@ declare
   v_guard       integer := 0;
 begin
   if v_from is null then
-    raise exception 'recurrence rule needs valid_from';
+    raise exception '%: recurrence rule needs valid_from', '0013_session_templates.sql';
   end if;
   v_interval := greatest(1, v_interval);
 
@@ -337,7 +465,7 @@ begin
     end loop;
 
   else
-    raise exception 'unknown recurrence frequency %', v_frequency;
+    raise exception '%: unknown recurrence frequency %', '0013_session_templates.sql', v_frequency;
   end if;
 
   v_dates := (select coalesce(array_agg(d order by d), '{}')::date[] from unnest(v_dates) as d);
@@ -432,6 +560,39 @@ as $$
     from mentis_session_templates t
    where t.id = p_template_id;
 $$;
+
+-- Every template version is kept, so a new season can start from an older one.
+create table if not exists mentis_session_template_versions (
+  template_id uuid not null references mentis_session_templates(id) on delete cascade,
+  version     integer not null,
+  snapshot    jsonb not null,
+  created_by  uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  primary key (template_id, version)
+);
+
+create or replace function record_session_template_version() returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into mentis_session_template_versions (template_id, version, snapshot, created_by)
+  values (new.id, new.version,
+          to_jsonb(new) - 'created_at' - 'updated_at' - 'created_by',
+          auth.uid())
+  on conflict (template_id, version) do update set snapshot = excluded.snapshot;
+  return new;
+end $$;
+
+drop trigger if exists session_templates_version_history on mentis_session_templates;
+create trigger session_templates_version_history after insert or update on mentis_session_templates
+  for each row execute function record_session_template_version();
+
+insert into mentis_session_template_versions (template_id, version, snapshot)
+select t.id, t.version, to_jsonb(t) - 'created_at' - 'updated_at' - 'created_by'
+  from mentis_session_templates t
+on conflict (template_id, version) do nothing;
 
 -- Which blueprint-derived values differ from the blueprint? Pure comparison of
 -- the supplied instance values, so it works from a trigger (new row values) and
@@ -570,13 +731,13 @@ declare
 begin
   select * into v_tpl from mentis_session_templates where id = p_template_id;
   if not found then
-    raise exception 'session template % not found', p_template_id;
+    raise exception '%: session template % not found', '0013_session_templates.sql', p_template_id;
   end if;
   if v_tpl.status = 'archived' then
-    raise exception '"%" is archived — reactivate the blueprint before scheduling from it', v_tpl.name;
+    raise exception '%: "%" is archived — reactivate the blueprint before scheduling from it', '0013_session_templates.sql', v_tpl.name;
   end if;
   if not is_admin(v_tpl.organization_id) then
-    raise exception 'only admins can schedule sessions from a blueprint';
+    raise exception '%: only admins can schedule sessions from a blueprint', '0013_session_templates.sql';
   end if;
 
   if p_start_at is null then
@@ -674,12 +835,12 @@ begin
   end if;
 
   -- Default roster: the register rows the blueprint expects to be filled.
-  if coalesce((p_options->>'enroll_roster')::boolean, true) and v_start >= now() then
+  if coalesce((p_options->>'enroll_roster')::boolean, true) then
     insert into mentis_enrollments (session_id, member_id)
     select v_session, m.member_id
       from mentis_session_template_members m
      where m.template_id = v_tpl.id
-    on conflict do nothing;
+    on conflict (session_id, member_id) do nothing;
     get diagnostics v_roster = row_count;
   end if;
 
@@ -734,19 +895,19 @@ declare
 begin
   select * into v_tpl from mentis_session_templates where id = p_template_id;
   if not found then
-    raise exception 'session template % not found', p_template_id;
+    raise exception '%: session template % not found', '0013_session_templates.sql', p_template_id;
   end if;
   if v_tpl.status = 'archived' then
-    raise exception '"%" is archived — reactivate the blueprint before publishing a series', v_tpl.name;
+    raise exception '%: "%" is archived — reactivate the blueprint before publishing a series', '0013_session_templates.sql', v_tpl.name;
   end if;
   if not is_admin(v_tpl.organization_id) then
-    raise exception 'only admins can publish a session series';
+    raise exception '%: only admins can publish a session series', '0013_session_templates.sql';
   end if;
 
   if v_rule_id is not null then
     select * into v_rule from mentis_recurrence_rules where id = v_rule_id;
     if not found then
-      raise exception 'recurrence rule % not found', v_rule_id;
+      raise exception '%: recurrence rule % not found', '0013_session_templates.sql', v_rule_id;
     end if;
     v_rule_json := jsonb_build_object(
       'organization_id', v_rule.organization_id,
@@ -783,7 +944,34 @@ begin
     ) || coalesce(p_rule, '{}'::jsonb);
     v_rule_json := jsonb_set(v_rule_json, '{organization_id}', to_jsonb(v_tpl.organization_id));
     v_rule_json := jsonb_set(v_rule_json, '{timezone}', to_jsonb(coalesce(v_rule_json->>'timezone', v_tpl.timezone)));
+  end if;
 
+  -- A bounded season must not be truncated by the default 90-day horizon.
+  if nullif(v_rule_json->>'valid_to', '') is not null then
+    v_rule_json := jsonb_set(v_rule_json, '{horizon_days}', to_jsonb(least(730, greatest(
+      coalesce((v_rule_json->>'horizon_days')::integer, 90),
+      (v_rule_json->>'valid_to')::date - (v_rule_json->>'valid_from')::date + 1))));
+  end if;
+
+  -- One season per template per start date: re-publishing reuses it.
+  if v_series is null then
+    select s.id, coalesce(v_rule_id, s.recurrence_rule_id) into v_series, v_rule_id
+      from mentis_session_series s
+     where s.template_id = v_tpl.id and s.starts_on = (v_rule_json->>'valid_from')::date;
+    if v_series is null then
+      v_rule_id := nullif(coalesce(p_options->>'rule_id', p_rule->>'rule_id'), '')::uuid;
+    end if;
+  end if;
+
+  if ((v_rule_json->>'start_time')::time >= (v_rule_json->>'end_time')::time) then
+    raise exception '%: recurrence rule for template "%" has invalid time order (% -> %); end_time must be later than start_time',
+      '0013_session_templates.sql',
+      v_tpl.name,
+      v_rule_json->>'start_time',
+      v_rule_json->>'end_time';
+  end if;
+
+  if v_rule_id is null then
     if v_series is null or not exists (select 1 from mentis_session_series where id = v_series) then
       insert into mentis_recurrence_rules (
         organization_id, template_id, label, frequency, interval_count, by_weekday,
@@ -811,6 +999,10 @@ begin
     else
       select recurrence_rule_id into v_rule_id from mentis_session_series where id = v_series;
     end if;
+  end if;
+
+  if v_series is not null and not exists (select 1 from mentis_session_series where id = v_series) then
+    v_series := null;
   end if;
 
   if v_series is null then
@@ -932,10 +1124,10 @@ declare
 begin
   select * into v_series from mentis_session_series where id = p_series_id;
   if not found then
-    raise exception 'session series % not found', p_series_id;
+    raise exception '%: session series % not found', '0013_session_templates.sql', p_series_id;
   end if;
   if v_series.status = 'ended' then
-    raise exception 'this series has ended — resume it before extending';
+    raise exception '%: this series has ended — resume it before extending', '0013_session_templates.sql';
   end if;
 
   select * into v_rule from mentis_recurrence_rules where id = v_series.recurrence_rule_id;
@@ -980,15 +1172,15 @@ declare
   v_cancelled integer := 0;
 begin
   if p_status not in ('active', 'paused', 'ended') then
-    raise exception 'unknown series status %', p_status;
+    raise exception '%: unknown series status %', '0013_session_templates.sql', p_status;
   end if;
 
   select * into v_series from mentis_session_series where id = p_series_id;
   if not found then
-    raise exception 'session series % not found', p_series_id;
+    raise exception '%: session series % not found', '0013_session_templates.sql', p_series_id;
   end if;
   if not is_admin(v_series.organization_id) then
-    raise exception 'only admins can change a session series';
+    raise exception '%: only admins can change a session series', '0013_session_templates.sql';
   end if;
 
   update mentis_session_series
@@ -1042,13 +1234,13 @@ declare
 begin
   select * into v_session from mentis_sessions where id = p_session_id;
   if not found then
-    raise exception 'session % not found', p_session_id;
+    raise exception '%: session % not found', '0013_session_templates.sql', p_session_id;
   end if;
   if v_session.template_id is null then
-    raise exception 'this session was not created from a blueprint';
+    raise exception '%: this session was not created from a blueprint', '0013_session_templates.sql';
   end if;
   if not is_admin(v_session.organization_id) then
-    raise exception 'only admins can re-apply a blueprint';
+    raise exception '%: only admins can re-apply a blueprint', '0013_session_templates.sql';
   end if;
 
   select * into v_tpl from mentis_session_templates where id = v_session.template_id;
@@ -1086,6 +1278,54 @@ end $$;
 comment on function apply_blueprint_to_session(uuid, text[], text) is
   'Re-apply blueprint values to a drifted instance (defaults to the drifted fields only).';
 
+-- Bring an older version back as the current one (recorded as a new version), so
+-- the next season is published from it without rewriting existing seasons.
+create or replace function restore_session_template_version(p_template_id uuid, p_version integer)
+returns integer
+language plpgsql
+as $$
+declare
+  v_org  uuid;
+  v_snap jsonb;
+  v_ver  integer;
+begin
+  select organization_id into v_org from mentis_session_templates where id = p_template_id;
+  if v_org is null then
+    raise exception '%: session template % not found', '0013_session_templates.sql', p_template_id;
+  end if;
+  if not is_admin(v_org) then
+    raise exception '%: only admins can restore a template version', '0013_session_templates.sql';
+  end if;
+
+  select snapshot into v_snap from mentis_session_template_versions
+   where template_id = p_template_id and version = p_version;
+  if v_snap is null then
+    raise exception '%: template % has no version %', '0013_session_templates.sql', p_template_id, p_version;
+  end if;
+
+  update mentis_session_templates set
+    name                 = v_snap->>'name',
+    description          = v_snap->>'description',
+    venue_id             = (v_snap->>'venue_id')::uuid,
+    default_start_time   = (v_snap->>'default_start_time')::time,
+    default_end_time     = (v_snap->>'default_end_time')::time,
+    timezone             = v_snap->>'timezone',
+    level_band           = v_snap->>'level_band',
+    capacity             = (v_snap->>'capacity')::integer,
+    min_headcount        = (v_snap->>'min_headcount')::integer,
+    default_charge_cents = (v_snap->>'default_charge_cents')::integer,
+    responsible_coach_id = (v_snap->>'responsible_coach_id')::uuid,
+    leading_coach_id     = (v_snap->>'leading_coach_id')::uuid,
+    assisting_coach_id   = (v_snap->>'assisting_coach_id')::uuid
+  where id = p_template_id
+  returning version into v_ver;
+
+  return v_ver;
+end $$;
+
+comment on function restore_session_template_version(uuid, integer) is
+  'Make an older template version current again (as a new version) before starting a season from it.';
+
 -- ---------------------------------------------------------------------------
 -- Layer 4 — bridge from the legacy weekly schedules
 -- ---------------------------------------------------------------------------
@@ -1113,7 +1353,7 @@ declare
 begin
   select * into w from mentis_weekly_schedules where id = p_schedule_id;
   if not found then
-    raise exception 'weekly schedule % not found', p_schedule_id;
+    raise exception '%: weekly schedule % not found', '0013_session_templates.sql', p_schedule_id;
   end if;
 
   if w.template_id is not null then
@@ -1121,6 +1361,18 @@ begin
     if v_tpl is not null then
       return v_tpl;
     end if;
+  end if;
+
+  if w.venue_id is null then
+    select id into w.venue_id
+      from mentis_venues
+     where organization_id = w.organization_id
+     order by name
+     limit 1;
+  end if;
+
+  if w.venue_id is null then
+    raise exception '%: weekly schedule % has no venue for legacy template import', '0013_session_templates.sql', p_schedule_id;
   end if;
 
   -- The same schedule can be imported twice in one session; the unique key on
@@ -1145,7 +1397,7 @@ begin
   select v_tpl, ss.capacity, ss.staff_id, ss.rate_card_id
     from mentis_schedule_staff ss
    where ss.schedule_id = w.id
-  on conflict do nothing;
+  on conflict (template_id, capacity, staff_id) do nothing;
 
   insert into mentis_recurrence_rules (
     organization_id, template_id, label, frequency, by_weekday, start_time, end_time, valid_from, valid_to
@@ -1180,6 +1432,16 @@ end $$;
 comment on function template_from_weekly_schedule(uuid) is
   'Import a legacy weekly schedule as a blueprint + rule + series (idempotent).';
 
+-- The bridge table is optional metadata for auxiliary context links. It is not
+-- part of the recurrence contract: each generated session keeps its canonical
+-- series_id on mentis_sessions and is not required to write a row here.
+create or replace function sync_session_series_link() returns trigger
+language plpgsql
+as $$
+begin
+  return new;
+end $$;
+
 -- Instances created the old way (by writing mentis_sessions with a schedule_id)
 -- still get the full provenance, so nothing in flight loses its blueprint.
 create or replace function link_session_blueprint() returns trigger
@@ -1212,6 +1474,8 @@ end $$;
 drop trigger if exists sessions_link_blueprint on mentis_sessions;
 create trigger sessions_link_blueprint before insert on mentis_sessions
   for each row execute function link_session_blueprint();
+
+drop trigger if exists sessions_sync_series_link on mentis_sessions;
 
 -- Backfill every schedule that exists today.
 do $$
@@ -1306,6 +1570,12 @@ alter table mentis_session_template_staffing  enable row level security;
 alter table mentis_session_template_members   enable row level security;
 alter table mentis_recurrence_rules           enable row level security;
 alter table mentis_session_series             enable row level security;
+alter table mentis_session_series_links       enable row level security;
+alter table mentis_session_template_versions  enable row level security;
+
+drop policy if exists session_template_versions_select on mentis_session_template_versions;
+create policy session_template_versions_select on mentis_session_template_versions
+  for select using (is_staff((select t.organization_id from mentis_session_templates t where t.id = template_id)));
 
 -- Blueprints are documentation of how the club runs: any staff member may read
 -- them, only admins may change them.
@@ -1346,11 +1616,20 @@ drop policy if exists session_series_write on mentis_session_series;
 create policy session_series_write on mentis_session_series
   for all using (is_admin(organization_id)) with check (is_admin(organization_id));
 
+drop policy if exists session_series_links_select on mentis_session_series_links;
+create policy session_series_links_select on mentis_session_series_links
+  for select using (is_staff((select s.organization_id from mentis_session_series s where s.id = series_id)));
+drop policy if exists session_series_links_write on mentis_session_series_links;
+create policy session_series_links_write on mentis_session_series_links
+  for all using (is_admin((select s.organization_id from mentis_session_series s where s.id = series_id)))
+  with check (is_admin((select s.organization_id from mentis_session_series s where s.id = series_id)));
+
 grant select on session_template_overview to authenticated;
+grant select on mentis_session_template_versions to authenticated;
 grant select on session_series_overview to authenticated;
 grant select, insert, update, delete on mentis_session_templates,
   mentis_session_template_staffing, mentis_session_template_members,
-  mentis_recurrence_rules, mentis_session_series to authenticated;
+  mentis_recurrence_rules, mentis_session_series, mentis_session_series_links to authenticated;
 grant execute on function
   expand_recurrence(jsonb),
   session_template_occurrences(jsonb),
@@ -1363,5 +1642,7 @@ grant execute on function
   extend_session_series(uuid, jsonb),
   set_session_series_status(uuid, text, boolean, text),
   apply_blueprint_to_session(uuid, text[], text),
+  restore_session_template_version(uuid, integer),
   template_from_weekly_schedule(uuid)
 to authenticated, service_role;
+

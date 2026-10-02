@@ -103,7 +103,7 @@ export function MatchEntry() {
   const [msg, setMsg] = useState('');
   useEffect(() => {
     supabase.from('mentis_members').select('id,name').order('name').then(({ data }) => setMembers(data ?? []));
-    supabase.from('mentis_sessions').select('id,name').order('start_at', { ascending: false }).limit(20).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_session_occurrences').select('id,name').order('start_at', { ascending: false }).limit(20).then(({ data }) => setSessions(data ?? []));
     supabase.from('mentis_events').select('id,name').order('starts_on', { ascending: false }).limit(20).then(({ data }) => setEvents(data ?? []));
   }, []);
   const save = async () => {

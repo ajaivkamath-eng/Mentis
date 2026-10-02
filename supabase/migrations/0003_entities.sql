@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0003_entities.sql';
+END $$;
+
+
 -- Mentis entities: sport profiles, member extensions, tasters, mentis_groups, segments, goals.
 -- Medical notes move to a dedicated table so RLS can gate them strictly (rule 3).
 create table mentis_sport_profiles (
@@ -69,3 +75,4 @@ create table mentis_member_goals (
 create index members_tte_idx on mentis_members(tte_number);
 create index prospects_status_idx on mentis_prospects(organization_id, status);
 create index goals_member_idx on mentis_member_goals(member_id, status);
+

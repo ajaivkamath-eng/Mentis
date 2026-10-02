@@ -16,7 +16,7 @@ Deno.serve(async () => {
   let created = 0;
   for (const row of rows ?? []) {
     const { data: session } = await supabase
-      .from('mentis_sessions')
+      .from('mentis_session_occurrences')
       .select('id, organization_id, name, start_at')
       .eq('id', row.session_id)
       .single();

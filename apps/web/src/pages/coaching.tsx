@@ -14,7 +14,7 @@ export function Today() {
   useEffect(() => {
     if (!staff) return;
     const day = new Date().toISOString().slice(0, 10);
-    supabase.from('mentis_sessions').select('id,name,start_at,end_at,venue_id,status,mentis_venues(name)')
+    supabase.from('mentis_session_occurrences').select('id,name,start_at,end_at,venue_id,status,mentis_venues(name)')
       .gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at').then(({ data }) => setSessions(data ?? []));
     supabase.from('mentis_tasks').select('id,title,due_at,status').eq('assignee_id', staff.id).neq('status', 'done').then(({ data }) => setTasks(data ?? []));
   }, [staff]);
@@ -57,25 +57,41 @@ export function Register() {
   const [saved, setSaved] = useState('');
   const [summary, setSummary] = useState<{ present: number; absent: number; tasters: number } | null>(null);
   const [sessionName, setSessionName] = useState('');
+  const [sessionWhen, setSessionWhen] = useState('');
   const [allMembers, setAllMembers] = useState<any[]>([]);
   const [adhoc, setAdhoc] = useState('');
 
   useEffect(() => {
     (async () => {
-      const { data: session } = await supabase.from('mentis_sessions').select('name').eq('id', id).single();
+      const { data: session } = await supabase.from('mentis_session_occurrences').select('name,start_at,end_at').eq('id', id).single();
       setSessionName(session?.name ?? '');
+      if (session?.start_at) {
+        const when = new Date(session.start_at);
+        setSessionWhen(when.toLocaleDateString('en-GB', { weekday: 'short' }) + ' ' + when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      }
+
       const { data: enroll } = await supabase.from('mentis_enrollments')
-        .select('id,member_id,status,mentis_members(id,name,special_needs_flag,mentis_customers(name,phone))')
-        .eq('session_id', id).in('status', ['active', 'invited']).eq('expected', true);
+        .select('id,member_id,status,expected,mentis_members!member_id_fkey(id,name,special_needs_flag,mentis_customers!customer_id_fkey(name,phone))')
+        .eq('session_id', id);
+
       const list: Row[] = (enroll ?? []).map((e: any) => ({
-        enrollmentId: e.id, memberId: e.member_id, name: e.members?.name ?? '—',
-        customer: e.members?.customers?.name, phone: e.members?.customers?.phone,
-        alert: !!e.members?.special_needs_flag,
+        enrollmentId: e.id, memberId: e.member_id, name: e.mentis_members?.name ?? '—',
+        customer: e.mentis_members?.mentis_customers?.name, phone: e.mentis_members?.mentis_customers?.phone,
+        alert: !!e.mentis_members?.special_needs_flag,
       }));
+
       const { data: tasters } = await supabase.from('mentis_prospects').select('id,name').eq('status', 'approved');
       for (const t of (tasters ?? []).filter((t: any) => true)) {
         list.push({ enrollmentId: `t-${t.id}`, memberId: '', name: t.name, alert: false, taster: true, tasterId: t.id });
       }
+
+      if (!list.length) {
+        const { data: fallbackMembers } = await supabase.from('mentis_members').select('id,name').order('name');
+        for (const member of fallbackMembers ?? []) {
+          list.push({ enrollmentId: `fallback-${member.id}`, memberId: member.id, name: member.name, alert: false });
+        }
+      }
+
       setRows(list);
       const records: AttendanceRecord[] = list.map((r) => ({
         id: r.enrollmentId, sessionInstanceId: id ?? '', memberId: r.memberId || undefined,
@@ -141,63 +157,118 @@ export function Register() {
   };
 
   if (!canDo('attendance.mark') && !canDo('attendance.view')) return <div className="p-8">No register access.</div>;
+
+  const sessionTitle = sessionName || 'Session';
+
   return (
-    <div>
-      <PageTitle title={sessionName || 'Register'} sub={`${marked}/${rows.length} marked`} right={
-        <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={() => setState((s) => undoLast(s))}><Undo2 size={16} /> Undo</button>
-          <button className="btn btn-ghost" onClick={() => setState((s) => markAllPresent(s, rows.map((r) => r.enrollmentId)))}><CheckCheck size={16} /> All present</button>
-          <button className="btn btn-primary" onClick={save}>Save</button>
-        </div>
-      } />
-      {saved && <div className="card p-2 mb-2 text-sm">{saved}</div>}
-      {summary && (
-        <div className="card p-3 mb-2 text-sm">
-          <strong>Summary:</strong> {summary.present} present · {summary.absent} absent · {summary.tasters} tasters
-          <Link className="btn btn-ghost ml-3" to={`/feedback/session/${id}`}><Star size={16} /> Record feedback</Link>
-        </div>
-      )}
-      <div className="flex gap-2 mb-3">
-        {(['all', 'alert', 'taster', 'unmarked'] as const).map((f) => (
-          <button key={f} className={`btn ${filter === f ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter(f)}>{f === 'alert' ? '⚠️' : f}</button>
-        ))}
-      </div>
-      <div className="card divide-y" style={{ ['--tw-divide-opacity' as string]: 1 }}>
-        {visible.map((r) => {
-          const rec = state.records[r.enrollmentId];
-          const present = rec?.status === 'present';
-          return (
-            <div key={r.enrollmentId}>
-              <button
-                className="w-full flex items-center gap-3 p-3 text-left"
-                style={{ background: present ? 'rgba(22,163,74,.12)' : undefined, minHeight: 56 }}
-                onClick={() => canDo('attendance.mark') && setState((s) => cycleAttendance(s, r.enrollmentId))}
-              >
-                <span className="font-bold text-lg w-8">{present ? '✓' : '○'}</span>
-                <span className="flex-1">
-                  <span className="font-semibold">{r.name}</span>
-                  {r.taster && <span className="badge ml-2" style={{ background: 'var(--warning)', color: '#000' }}>Taster</span>}
-                  {r.alert && <span className="badge ml-2" style={{ background: 'var(--danger)', color: '#fff' }}>⚠️</span>}
-                  <div className="text-xs" style={{ color: 'var(--ink-muted)' }}>{r.customer} {r.phone && `· ${r.phone}`}</div>
-                </span>
-                {r.alert && <span className="btn btn-ghost" onClick={(e) => { e.stopPropagation(); openAlert(r.memberId); }}>Alert</span>}
-                {r.phone && <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="btn btn-ghost"><Phone size={16} /></a>}
-              </button>
-              {alertFor === r.memberId && (
-                <div className="p-3 text-sm" style={{ background: 'rgba(220,38,38,.08)' }}>
-                  <strong>Medical / special needs:</strong> {medical[r.memberId] ?? 'Loading… (access audit-logged)'}
-                </div>
-              )}
+    <div className="mx-auto w-full max-w-5xl px-2 py-3 md:px-4 md:py-4">
+      <div className="rounded-[22px] border border-slate-200 bg-white/80 p-3 shadow-[0_10px_28px_rgba(15,23,42,0.04)] backdrop-blur-sm md:p-4">
+        <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Session register</div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <h1 className="text-2xl font-black tracking-[-0.04em] text-slate-900 md:text-4xl">{sessionTitle}</h1>
+              {sessionWhen && <span className="text-sm font-semibold text-slate-500 md:text-base">{sessionWhen}</span>}
             </div>
-          );
-        })}
-      </div>
-      <div className="mt-3 flex gap-2 items-center">
-        <Link className="btn btn-ghost" to={`/feedback/session/${id}`}><Star size={16} /> Record feedback</Link>
-        <select className="input" style={{ width: 220 }} value={adhoc} onChange={(e) => setAdhoc(e.target.value)}>
-          <option value="">Ad-hoc member…</option>{allMembers.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </select>
-        <button className="btn btn-ghost" onClick={addAdhoc}><Plus size={16} /> Add</button>
+            <div className="mt-1 text-xs font-medium text-slate-500">{marked}/{rows.length} marked</div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100" onClick={() => setState((s) => undoLast(s))}><Undo2 size={15} /> Undo</button>
+            <button className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100" onClick={() => setState((s) => markAllPresent(s, rows.map((r) => r.enrollmentId)))}><CheckCheck size={15} /> All present</button>
+            <button className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:brightness-105" onClick={save}>Save</button>
+          </div>
+        </div>
+
+        {saved && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{saved}</div>}
+
+        {summary && (
+          <div className="mt-3 flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 md:flex-row md:items-center md:justify-between">
+            <div className="font-semibold">
+              <span className="text-emerald-700">{summary.present}</span> present · <span className="text-slate-600">{summary.absent}</span> absent · <span className="text-amber-700">{summary.tasters}</span> tasters
+            </div>
+            <Link className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100" to={`/feedback/session/${id}`}><Star size={14} /> Record feedback</Link>
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {(['all', 'alert', 'taster', 'unmarked'] as const).map((f) => {
+            const selected = filter === f;
+            const tone = selected
+              ? 'bg-slate-900 text-white border-slate-900'
+              : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100';
+            const label = f === 'alert' ? 'alert' : f === 'taster' ? 'taster' : f === 'unmarked' ? 'unmarked' : 'all';
+            return (
+              <button key={f} className={`inline-flex items-center justify-center rounded-xl border px-3 py-2 text-xs font-bold uppercase tracking-[0.08em] transition ${tone}`} onClick={() => setFilter(f)}>
+                {f === 'alert' ? '⚠️' : f === 'taster' ? 'taster' : f === 'unmarked' ? 'unmarked' : 'all'}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/60 overflow-hidden">
+          {visible.length === 0 ? (
+            <div className="flex min-h-[180px] items-center justify-center p-6 text-center text-sm text-slate-500">
+              No members in this session yet. Add a player or load the roster to begin a quick attendance check.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-200">
+              {visible.map((r) => {
+                const rec = state.records[r.enrollmentId];
+                const status = rec?.status ?? 'absent';
+                const active = status === 'present';
+                const late = status === 'late';
+                const bg = active ? 'bg-emerald-50' : late ? 'bg-amber-50' : 'bg-white';
+                const chip = active ? 'bg-emerald-500 text-white' : late ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-700';
+                return (
+                  <button
+                    key={r.enrollmentId}
+                    className={`flex w-full items-center gap-3 px-3 py-3 text-left transition md:px-4 ${bg}`}
+                    onClick={() => canDo('attendance.mark') && setState((s) => cycleAttendance(s, r.enrollmentId))}
+                  >
+                    <div className={`grid size-10 place-items-center rounded-xl text-xs font-black shadow-sm ${chip}`}>
+                      {active ? '✓' : late ? 'L' : '○'}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-base font-bold text-slate-900">{r.name}</span>
+                        {r.taster && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-amber-700">Taster</span>}
+                        {r.alert && <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-rose-700">Alert</span>}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-500">{r.customer ?? 'Member'}{r.phone ? ` · ${r.phone}` : ''}</div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {r.alert && (
+                        <button
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-rose-700"
+                          onClick={(e) => { e.stopPropagation(); openAlert(r.memberId); }}
+                        >
+                          Alert
+                        </button>
+                      )}
+                      {r.phone && (
+                        <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="grid size-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100">
+                          <Phone size={15} />
+                        </a>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
+          <Link className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100" to={`/feedback/session/${id}`}><Star size={14} /> Record feedback</Link>
+          <select className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none md:max-w-[260px]" value={adhoc} onChange={(e) => setAdhoc(e.target.value)}>
+            <option value="">Ad-hoc member…</option>
+            {allMembers.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+          <button className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-[0.08em] text-slate-700 transition hover:bg-slate-100" onClick={addAdhoc}><Plus size={14} /> Add</button>
+        </div>
       </div>
     </div>
   );
@@ -223,7 +294,7 @@ export function Feedback() {
       setMembers((data ?? []).map((e: any) => e.mentis_members)));
     supabase.from('mentis_session_staffing').select('staff_id,mentis_staff(display_name)').eq('session_id', id).then(({ data }) => setStaffing(data ?? []));
     const day = new Date().toISOString().slice(0, 10);
-    supabase.from('mentis_sessions').select('id,name,start_at,mentis_venues(name)').gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at')
+    supabase.from('mentis_session_occurrences').select('id,name,start_at,mentis_venues(name)').gte('start_at', `${day}T00:00:00Z`).lte('start_at', `${day}T23:59:59Z`).order('start_at')
       .then(({ data }) => setTodayList(data ?? []));
     try {
       navigator.geolocation?.getCurrentPosition(() => { /* venue proximity when venue coords exist */ }, () => {});

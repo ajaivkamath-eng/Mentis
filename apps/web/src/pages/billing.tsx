@@ -200,7 +200,7 @@ export function Reconciliation() {
   const loadAll = async () => {
     setLoading(true);
     const [sessRes, staffRes, teRes, invRes] = await Promise.all([
-      supabase.from('mentis_sessions').select('id, name, start_at, end_at, status, venue_id, mentis_venues(name)').order('start_at', { ascending: false }).limit(200),
+      supabase.from('mentis_session_occurrences').select('id, name, start_at, end_at, status, venue_id, mentis_venues(name)').order('start_at', { ascending: false }).limit(200),
       supabase.from('mentis_session_staffing').select('*, mentis_staff(display_name), mentis_rate_cards(rate_cents, label)'),
       supabase.from('mentis_staff_time_entries').select('*, mentis_staff(display_name)'),
       supabase.from('mentis_invoices').select('*, mentis_invoice_lines(*)'),

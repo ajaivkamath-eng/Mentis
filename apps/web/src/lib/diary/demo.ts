@@ -71,7 +71,7 @@ const sessionSeeds: SessionSeed[] = [
       { staffId: 'staff-sam', role: 'sparrer', from: [9, 0], to: [12, 0], chargeable: true },
     ],
   },
-  // Next week: overlaps Alex's holiday → conflict example.
+  // Next week: overlaps Alex's vacation → conflict example.
   {
     id: 'sess-u11-next', name: 'U11 Juniors', venue: 'Kingfisher Main Hall', dayIdx: 7, start: [18, 0], end: [19, 0],
     allocations: [
@@ -163,13 +163,13 @@ export function buildDemoDiary(): {
   manual('staff-sam', 'Available for sparring', 'available', 5, [9, 0], [12, 0]);
   manual(DEMO_ME, 'Gym session', 'working_elsewhere', 2, [7, 0], [8, 30]);
 
-  // Holiday for me — next Mon→Tue; overlaps next Monday's U11 session (conflict).
+  // Vacation for me — next Mon→Tue; overlaps next Monday's U11 session (conflict).
   const holStart = at(7, 0, 0);
   const holEnd = at(9, 0, 0);
   holEnd.setDate(holEnd.getDate() + 1);
   events.push({
     id: id('ent'), staffId: DEMO_ME, staffName: nameOf(DEMO_ME),
-    title: 'Family trip — York', kind: 'holiday', allDay: true,
+    title: 'Family trip — York', kind: 'vacation', allDay: true,
     start: iso(holStart), end: iso(holEnd), sourceType: 'manual', notes: 'Booked months ago',
   });
 

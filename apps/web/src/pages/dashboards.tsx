@@ -65,11 +65,11 @@ async function loadVenueSummaries(): Promise<VenueSummary[]> {
   if (!venues?.length) return [];
 
   const [{ data: sessions }, { data: staffing }, { data: attendance }] = await Promise.all([
-    supabase.from('mentis_sessions').select('id,venue_id'),
+    supabase.from('mentis_session_occurrences').select('id,venue_id'),
     supabase
       .from('mentis_session_staffing')
       .select('planned_start,planned_end,session_id,mentis_rate_cards(rate_cents)'),
-    supabase.from('mentis_attendance_records').select('status,mentis_sessions!inner(venue_id)').eq('status', 'present'),
+    supabase.from('mentis_attendance_records').select('status,mentis_session_occurrences!inner(venue_id)').eq('status', 'present'),
   ]);
 
   const venueOfSession = new Map<string, string>((sessions ?? []).map((s: any) => [s.id, s.venue_id]));
@@ -94,7 +94,7 @@ async function loadVenueSummaries(): Promise<VenueSummary[]> {
   }
 
   for (const a of attendance ?? []) {
-    const row = rows.get((a as any).mentis_sessions?.venue_id ?? '');
+    const row = rows.get((a as any).mentis_session_occurrences?.venue_id ?? '');
     if (row) row.present += 1;
   }
 
@@ -347,7 +347,7 @@ export function VenueDashboard() {
 
 interface Enrolment {
   status: string;
-  mentis_sessions: { name: string | null; start_at: string | null } | null;
+  mentis_session_occurrences: { name: string | null; start_at: string | null } | null;
 }
 
 interface MemberRow {
@@ -368,7 +368,7 @@ export function MemberSessions() {
     let alive = true;
     supabase
       .from('mentis_members')
-      .select('id,name,mentis_enrollments(status,mentis_sessions(name,start_at))')
+      .select('id,name,mentis_enrollments(status,mentis_session_occurrences(name,start_at))')
       .order('name')
       .then(({ data, error: err }) => {
         if (!alive) return;
@@ -408,9 +408,9 @@ export function MemberSessions() {
           <span className="flex flex-wrap gap-1.5">
             {list.slice(0, 4).map((e, i) => (
               <StatusBadge
-                key={`${e.mentis_sessions?.name ?? 'session'}-${i}`}
+                key={`${e.mentis_session_occurrences?.name ?? 'session'}-${i}`}
                 status={e.status}
-                label={`${e.mentis_sessions?.name ?? 'Session'} · ${e.status}`}
+                label={`${e.mentis_session_occurrences?.name ?? 'Session'} · ${e.status}`}
               />
             ))}
             {list.length > 4 && <Badge tone="neutral">+{list.length - 4} more</Badge>}
@@ -425,12 +425,12 @@ export function MemberSessions() {
       hideBelow: 'md',
       sortValue: (m) =>
         (m.mentis_enrollments ?? [])
-          .map((e) => e.mentis_sessions?.start_at ?? '')
+          .map((e) => e.mentis_session_occurrences?.start_at ?? '')
           .filter((d) => d && Date.parse(d) > Date.now())
           .sort()[0] ?? '',
       cell: (m) => {
         const next = (m.mentis_enrollments ?? [])
-          .map((e) => e.mentis_sessions?.start_at)
+          .map((e) => e.mentis_session_occurrences?.start_at)
           .filter((d): d is string => Boolean(d) && Date.parse(d as string) > Date.now())
           .sort()[0];
         return next ? (
@@ -550,7 +550,7 @@ export function MemberSessions() {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {(m.mentis_enrollments ?? []).slice(0, 3).map((e, i) => (
-                    <StatusBadge key={i} status={e.status} label={e.mentis_sessions?.name ?? 'Session'} />
+                    <StatusBadge key={i} status={e.status} label={e.mentis_session_occurrences?.name ?? 'Session'} />
                   ))}
                 </div>
               </div>
@@ -611,7 +611,7 @@ export function IcsExport() {
       const [{ data: staffing }, { data: tasks }] = await Promise.all([
         supabase
           .from('mentis_session_staffing')
-          .select('planned_start,planned_end,mentis_sessions(name)')
+          .select('planned_start,planned_end,mentis_session_occurrences(name)')
           .eq('staff_id', staff.id),
         supabase.from('mentis_tasks').select('title,due_at').eq('assignee_id', staff.id).neq('status', 'done'),
       ]);
@@ -622,7 +622,7 @@ export function IcsExport() {
 
       let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Mentis//Diary//EN\r\n';
       for (const s of staffing ?? []) {
-        ics += `BEGIN:VEVENT\r\nUID:${uid()}\r\nDTSTART:${fmt(s.planned_start)}\r\nDTEND:${fmt(s.planned_end)}\r\nSUMMARY:${esc((s as any).mentis_sessions?.name ?? 'Session')}\r\nEND:VEVENT\r\n`;
+        ics += `BEGIN:VEVENT\r\nUID:${uid()}\r\nDTSTART:${fmt(s.planned_start)}\r\nDTEND:${fmt(s.planned_end)}\r\nSUMMARY:${esc((s as any).mentis_session_occurrences?.name ?? 'Session')}\r\nEND:VEVENT\r\n`;
       }
       for (const t of tasks ?? []) {
         if (!t.due_at) continue;

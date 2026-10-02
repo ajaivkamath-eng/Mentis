@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: { alias: { '@mentis/core': resolve(__dirname, '../../packages/core/src/index.ts') } },
   test: {
     environment: 'jsdom',
+    env: { VITE_DEMO: '1' },
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.tsx', 'src/**/*.test.ts'],

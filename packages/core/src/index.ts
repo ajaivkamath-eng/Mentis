@@ -22,3 +22,4 @@ export * from './bookings.js';
 export * from './reports.js';
 export * from './csvimport.js';
 export * from './search.js';
+export * from './tagging.js';

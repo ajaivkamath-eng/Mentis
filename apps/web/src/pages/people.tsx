@@ -4,7 +4,7 @@ import { demoEnabled, isDemoSession } from '../lib/demo';
 import { addDemoCustomer, addDemoMember, demoCustomersSnapshot } from '../lib/people-data';
 import { useAuth } from '../lib/auth';
 import { PageTitle } from '../lib/ui';
-import { validateMember, ageAt } from '@mentis/core';
+import { validateMember, ageAt, TAG_TYPE_DEFINITIONS, createQualificationReminderAction, qualificationDocumentStoragePath, qualificationReminderStatus, coachQualificationChecklistSummary } from '@mentis/core';
 
 const demoPeopleMode = () => demoEnabled || isDemoSession();
 
@@ -12,15 +12,42 @@ const demoPeopleMode = () => demoEnabled || isDemoSession();
 export function MemberForm() {
   const { staff } = useAuth();
   const [customers, setCustomers] = useState<any[]>([]);
+  const [memberTagTypes, setMemberTagTypes] = useState<any[]>([]);
+  const [memberTagValues, setMemberTagValues] = useState<any[]>([]);
+  const [selectedTags, setSelectedTags] = useState<Record<string, string[]>>({});
   const [form, setForm] = useState({ name: '', dateOfBirth: '', customer_id: '', nokName: '', nokPhone: '', tteNumber: '', handedness: '', playingStyle: '', equipmentNotes: '' });
   const [msg, setMsg] = useState('');
+
   useEffect(() => {
     if (demoPeopleMode()) {
       setCustomers(demoCustomersSnapshot().map((customer) => ({ id: customer.id, name: customer.name })));
+      setMemberTagTypes(TAG_TYPE_DEFINITIONS.filter((tag) => tag.scope === 'member'));
+      setMemberTagValues(TAG_TYPE_DEFINITIONS.flatMap((tag) => tag.options.map((option) => ({ id: `${tag.scope}:${tag.code}:${option.code}`, tag_type_id: tag.code, label: option.label, code: option.code, tag_type_code: tag.code, tag_type_scope: tag.scope }))));
       return;
     }
     supabase.from('mentis_customers').select('id,name').order('name').then(({ data }) => setCustomers(data ?? []));
+    Promise.all([
+      supabase.from('mentis_tag_types').select('*').eq('scope', 'member').eq('is_active', true).order('sort_order', { ascending: true }),
+      supabase.from('mentis_tag_values').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
+    ]).then(([typesResult, valuesResult]) => {
+      const types = typesResult.data ?? [];
+      setMemberTagTypes(types);
+      setMemberTagValues(valuesResult.data ?? []);
+      setSelectedTags(Object.fromEntries(types.map((type: any) => [type.id, type.allow_multiple ? [] : []])));
+    });
   }, []);
+
+  const toggleTag = (typeId: string, allowMultiple: boolean, valueId: string) => {
+    setSelectedTags((current) => {
+      const existing = current[typeId] ?? [];
+      if (!allowMultiple) return { ...current, [typeId]: [valueId] };
+      const next = existing.includes(valueId)
+        ? existing.filter((id) => id !== valueId)
+        : [...existing, valueId];
+      return { ...current, [typeId]: next };
+    });
+  };
+
   const save = async () => {
     const errs = validateMember({
       id: '', customerId: form.customer_id || undefined, dateOfBirth: form.dateOfBirth,
@@ -43,18 +70,37 @@ export function MemberForm() {
       setForm({ ...form, name: '' });
       return;
     }
-    const { error } = await supabase.from('mentis_members').insert({
+    const { data: member, error } = await supabase.from('mentis_members').insert({
       organization_id: staff?.organization_id, name: form.name, date_of_birth: form.dateOfBirth,
       customer_id: form.customer_id || null, tte_number: form.tteNumber || null,
       handedness: form.handedness || null, playing_style: form.playingStyle || null,
       equipment_notes: form.equipmentNotes || null,
-    });
+    }).select('id').single();
     if (error) { setMsg(error.message); return; }
+    const tagRows: any[] = [];
+    for (const tagType of memberTagTypes) {
+      const chosen = selectedTags[tagType.id] ?? [];
+      for (const valueId of chosen) {
+        const tagValue = memberTagValues.find((item: any) => item.id === valueId);
+        if (!tagValue) continue;
+        tagRows.push({
+          organization_id: staff?.organization_id,
+          tag_type_id: tagType.id,
+          tag_value_id: valueId,
+          entity_type: 'member',
+          entity_id: member.id,
+        });
+      }
+    }
+    if (tagRows.length) {
+      await supabase.from('mentis_entity_tags').insert(tagRows);
+    }
     if (form.customer_id && (form.nokName || form.nokPhone)) {
       await supabase.from('mentis_customers').update({ nok_name: form.nokName || null, nok_phone: form.nokPhone || null }).eq('id', form.customer_id);
     }
     setMsg(`Saved (age ${ageAt(form.dateOfBirth)}).`);
     setForm({ ...form, name: '' });
+    setSelectedTags({});
   };
   return (
     <div>
@@ -75,6 +121,50 @@ export function MemberForm() {
         </div>
         <input className="input" placeholder="Playing style" value={form.playingStyle} onChange={(e) => setForm({ ...form, playingStyle: e.target.value })} />
         <input className="input" placeholder="Equipment notes" value={form.equipmentNotes} onChange={(e) => setForm({ ...form, equipmentNotes: e.target.value })} />
+
+        {!demoPeopleMode() && memberTagTypes.length > 0 && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="text-sm font-semibold mb-2">Member tags</div>
+            <div className="space-y-3">
+              {memberTagTypes.map((tagType: any) => {
+                const values = memberTagValues.filter((item: any) => item.tag_type_id === tagType.id || item.tag_type_code === tagType.code);
+                if (!values.length) return null;
+                const selected = selectedTags[tagType.id] ?? [];
+                return (
+                  <div key={tagType.id}>
+                    <div className="text-xs uppercase tracking-[0.08em] text-slate-500 mb-1">{tagType.label}</div>
+                    {tagType.allow_multiple ? (
+                      <div className="flex flex-wrap gap-2">
+                        {values.map((value: any) => (
+                          <label key={value.id} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={selected.includes(value.id)}
+                              onChange={() => toggleTag(tagType.id, true, value.id)}
+                            />
+                            {value.label}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <select
+                        className="input"
+                        value={selected[0] ?? ''}
+                        onChange={(e) => toggleTag(tagType.id, false, e.target.value)}
+                      >
+                        <option value="">Select {tagType.label}</option>
+                        {values.map((value: any) => (
+                          <option key={value.id} value={value.id}>{value.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <button className="btn btn-primary" style={{ width: 'fit-content' }} onClick={save}>Save member</button>
         {msg && <p className="text-sm">{msg}</p>}
       </div>
@@ -137,7 +227,7 @@ export function Enrolments() {
   const [sel, setSel] = useState('');
   const [rows, setRows] = useState<any[]>([]);
   const load = () => {
-    supabase.from('mentis_sessions').select('id,name,start_at').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_session_occurrences').select('id,name,start_at').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
     if (sel) supabase.from('mentis_enrollments').select('*,mentis_members(name)').eq('session_id', sel).then(({ data }) => setRows(data ?? []));
   };
   useEffect(() => { load(); }, [sel]);
@@ -176,6 +266,193 @@ export function Enrolments() {
             </td></tr>
         ))}</tbody>
       </table></div>
+    </div>
+  );
+}
+
+export function CoachProfile() {
+  const { staff } = useAuth();
+  const [qualificationTypes, setQualificationTypes] = useState<any[]>([]);
+  const [qualifications, setQualifications] = useState<any[]>([]);
+  const [form, setForm] = useState({ qualification_type_id: '', title: '', issue_date: '', expires_at: '', document_name: '', document_url: '', notes: '' });
+  const [loading, setLoading] = useState(false);
+  const mandatoryChecklist = coachQualificationChecklistSummary(qualificationTypes, qualifications);
+  const requiredChecklist = mandatoryChecklist.filter((item) => item.required);
+
+  const load = async () => {
+    if (!staff?.id || !staff.organization_id) return;
+    const [typesResult, qualsResult] = await Promise.all([
+      supabase.from('mentis_qualification_types').select('*').eq('organization_id', staff.organization_id).order('name', { ascending: true }),
+      supabase.from('mentis_staff_qualifications').select('*, mentis_qualification_types(*)').eq('staff_id', staff.id).order('expires_at', { ascending: true }),
+    ]);
+    setQualificationTypes(typesResult.data ?? []);
+    setQualifications(qualsResult.data ?? []);
+  };
+
+  useEffect(() => { void load(); }, [staff?.id, staff?.organization_id]);
+
+  const handleDocumentUpload = async (event: any) => {
+    const file = event.target?.files?.[0];
+    if (!file || !staff?.id || !staff.organization_id) return;
+    const type = qualificationTypes.find((entry: any) => entry.id === form.qualification_type_id);
+    const path = qualificationDocumentStoragePath({
+      organizationId: staff.organization_id,
+      staffId: staff.id,
+      qualificationTypeId: form.qualification_type_id || 'custom',
+      fileName: file.name,
+    });
+    const { error: uploadError } = await supabase.storage.from('documents').upload(path, file, { upsert: true, contentType: file.type || 'application/octet-stream' });
+    if (uploadError) {
+      alert(uploadError.message);
+      return;
+    }
+    const { data: signed } = await supabase.storage.from('documents').createSignedUrl(path, 60 * 60 * 24 * 7);
+    setForm((current) => ({
+      ...current,
+      document_name: file.name,
+      document_url: signed?.signedUrl ?? '',
+      title: current.title || type?.name || 'Qualification',
+    }));
+  };
+
+  const saveQualification = async () => {
+    if (!staff?.id || !staff.organization_id || !form.qualification_type_id) return;
+    setLoading(true);
+    const type = qualificationTypes.find((entry: any) => entry.id === form.qualification_type_id);
+    const expiresAt = form.expires_at || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const status = qualificationReminderStatus(new Date().toISOString(), expiresAt, type?.reminder_days ?? 30);
+    const nextTitle = (form.title || type?.name || 'Qualification').trim();
+    const { data: row, error } = await supabase.from('mentis_staff_qualifications').insert({
+      organization_id: staff.organization_id,
+      staff_id: staff.id,
+      qualification_type_id: form.qualification_type_id,
+      title: nextTitle,
+      issue_date: form.issue_date || null,
+      expires_at: expiresAt,
+      document_url: form.document_url || null,
+      document_name: form.document_name || null,
+      status,
+      notes: form.notes || null,
+    }).select('id').single();
+
+    if (!error && row && status === 'expiring_soon') {
+      const action = createQualificationReminderAction({
+        coachStaffId: staff.id,
+        qualificationTitle: nextTitle,
+        expiresAt,
+        reminderDays: type?.reminder_days ?? 30,
+        organizationId: staff.organization_id,
+      });
+      const { data: existingType } = await supabase.from('mentis_action_types').select('id').eq('organization_id', staff.organization_id).eq('name', 'renew qualification').limit(1).maybeSingle();
+      let actionTypeId = existingType?.id;
+      if (!actionTypeId) {
+        const { data: insertedType } = await supabase.from('mentis_action_types').insert({
+          organization_id: staff.organization_id,
+          name: 'renew qualification',
+          trigger: 'manual',
+        }).select('id').single();
+        actionTypeId = insertedType?.id;
+      }
+      if (actionTypeId) {
+        await supabase.from('mentis_pending_actions').insert({
+          organization_id: action.organizationId,
+          action_type_id: actionTypeId,
+          title: action.title,
+          assignee_id: action.assigneeId,
+          due_at: action.dueAt,
+          linked_entity_type: 'staff',
+          linked_entity_id: staff.id,
+          status: 'open',
+        });
+      }
+    }
+    if (!error) {
+      setForm({ qualification_type_id: '', title: '', issue_date: '', expires_at: '', document_name: '', document_url: '', notes: '' });
+      await load();
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div>
+      <PageTitle title="My coach profile" sub="Certificates, safeguarding, DBS and other coach requirements" />
+      <div className="space-y-4">
+        <div className="card p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold">Mandatory checklist</div>
+            <span className="badge" style={{ background: 'var(--surface-inset)' }}>{requiredChecklist.filter((item) => item.isComplete).length}/{requiredChecklist.length} complete</span>
+          </div>
+          {requiredChecklist.length === 0 ? (
+            <div className="text-sm text-slate-500">No required qualification types configured.</div>
+          ) : (
+            <div className="space-y-2">
+              {requiredChecklist.map((item) => (
+                <div key={item.qualificationTypeId} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                  <div>
+                    <div className="text-sm font-semibold">{item.name}</div>
+                    <div className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{item.category} · {item.requiresDocumentUpload ? 'proof required' : 'proof optional'}</div>
+                  </div>
+                  <div className="text-right text-xs">
+                    <div className="font-medium" style={{ color: item.isComplete ? 'var(--success)' : item.status === 'expired' ? 'var(--danger)' : 'var(--warning)' }}>{item.isComplete ? 'Complete' : item.status === 'expired' ? 'Expired' : item.status === 'expiring_soon' ? 'Action needed' : 'Missing'}</div>
+                    <div className="text-slate-500">{item.hasDocument ? 'proof uploaded' : item.requiresDocumentUpload ? 'proof missing' : 'no proof required'}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card p-4">
+          <div className="mb-3 text-sm font-semibold">Current qualifications</div>
+          {qualifications.length === 0 ? (
+            <div className="text-sm text-slate-500">No qualifications added yet.</div>
+          ) : (
+            <div className="space-y-3">
+              {qualifications.map((qualification: any) => {
+                const type = qualification.mentis_qualification_types ?? qualificationTypes.find((entry: any) => entry.id === qualification.qualification_type_id);
+                const status = qualificationReminderStatus(new Date().toISOString(), qualification.expires_at, type?.reminder_days ?? 30);
+                const badgeColor = status === 'expired' ? 'var(--danger)' : status === 'expiring_soon' ? 'var(--warning)' : 'var(--success)';
+                return (
+                  <div key={qualification.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-sm">{qualification.title || type?.name || 'Qualification'}</div>
+                        <div className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{type?.category || 'certificate'} · {qualification.expires_at ? new Date(qualification.expires_at).toLocaleDateString('en-GB') : 'No expiry date'}</div>
+                      </div>
+                      <span className="badge" style={{ background: badgeColor }}>{status}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                      {qualification.document_url ? <a href={qualification.document_url} target="_blank" rel="noreferrer" className="underline">View proof</a> : <span>No proof uploaded</span>}
+                      {qualification.document_name && <span>({qualification.document_name})</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="card p-4">
+          <div className="mb-3 text-sm font-semibold">Add or renew a qualification</div>
+          <div className="grid md:grid-cols-2 gap-2">
+            <select className="input" value={form.qualification_type_id} onChange={(e) => setForm({ ...form, qualification_type_id: e.target.value })}>
+              <option value="">Select qualification type…</option>
+              {qualificationTypes.map((type: any) => <option key={type.id} value={type.id}>{type.name}</option>)}
+            </select>
+            <input className="input" placeholder="Title override" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </div>
+          <div className="grid md:grid-cols-2 gap-2 mt-2">
+            <label className="text-sm">Issue date <input type="date" className="input" value={form.issue_date} onChange={(e) => setForm({ ...form, issue_date: e.target.value })} /></label>
+            <label className="text-sm">Expiry date <input type="date" className="input" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} /></label>
+          </div>
+          <div className="grid md:grid-cols-2 gap-2 mt-2">
+            <label className="text-sm">Proof document <input type="file" className="input" accept="image/*,.pdf" onChange={handleDocumentUpload} /></label>
+            <input className="input" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </div>
+          {form.document_name && <div className="mt-2 text-xs text-slate-600">Uploaded: {form.document_name}</div>}
+          <button className="btn btn-primary mt-3" onClick={() => void saveQualification()} disabled={loading}>{loading ? 'Saving…' : 'Save qualification'}</button>
+        </div>
+      </div>
     </div>
   );
 }

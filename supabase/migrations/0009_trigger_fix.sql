@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0009_trigger_fix.sql';
+END $$;
+
+
 -- Fix: prevent_locked_invoice_change() referenced old.invoice_id on the mentis_invoices
 -- table, where the field does not exist (record fields resolve at plan time,
 -- so the CASE branch did not protect it). JSONB extraction is table-agnostic.
@@ -6,7 +12,8 @@ declare iid uuid;
 begin
   iid := coalesce((to_jsonb(old)->>'invoice_id')::uuid, (to_jsonb(old)->>'id')::uuid);
   if exists (select 1 from mentis_invoices where id = iid and status in ('approved', 'paid')) then
-    raise exception 'approved invoice is locked';
+    raise exception '%: approved invoice is locked', '0009_trigger_fix.sql';
   end if;
   if TG_OP = 'DELETE' then return old; else return new; end if;
 end $$;
+

@@ -74,16 +74,17 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, keywords: 'home kpi summary' },
       { to: '/today', label: 'Today', icon: CalendarDays, perm: 'sessions.assigned', primary: true, keywords: 'sessions register now' },
+      { to: '/profile', label: 'My profile', icon: UserCog, perm: 'staff.self', keywords: 'coach profile qualification documents expiry' },
     ],
   },
   {
     id: 'coaching',
     label: 'Coaching',
     items: [
-      { to: '/sessions', label: 'Sessions', icon: CalendarRange, perm: 'sessions.manage', keywords: 'classes timetable' },
+      { to: '/sessions', label: 'Sessions', icon: CalendarRange, perm: 'sessions.manage', keywords: 'programs program runs recurring timetable classes' },
       { to: '/diary-manage', label: 'Diary', icon: CalendarClock, perm: 'diary.manage', keywords: 'calendar bookings' },
       { to: '/scheduling', label: 'Scheduling', icon: Repeat, perm: 'sessions.manage', keywords: 'patterns generate' },
-      { to: '/templates', label: 'Blueprints', icon: Layers, perm: 'sessions.manage', keywords: 'templates session blueprint recurring series slots' },
+      { to: '/program-blueprints', label: 'Program blueprints', icon: Layers, perm: 'sessions.manage', keywords: 'program blueprint templates recurring sessions slots' },
       { to: '/availability', label: 'Coach diary', icon: CalendarDays, perm: 'availability.recordSelf', keywords: 'diary availability calendar holiday planner hours' },
       { to: '/staffing', label: 'Staffing', icon: Users2, perm: 'staffing.manage', keywords: 'assign coach' },
       { to: '/closeout', label: 'Close-out', icon: CalendarCheck, perm: 'staffing.manage', keywords: 'session close reconciliation' },

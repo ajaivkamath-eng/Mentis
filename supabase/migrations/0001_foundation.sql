@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0001_foundation.sql';
+END $$;
+
+
 create extension if not exists pgcrypto;
 create type mentis_role as enum ('SUPER_ADMIN','ADMIN','COACH','SPARRER');
 create type attendance_status as enum ('present','absent','late','taster');
@@ -26,3 +32,4 @@ create policy session_access on mentis_sessions for all using (organization_id i
 create policy enrollment_access on mentis_enrollments for all using (session_id in (select id from mentis_sessions where organization_id in (select organization_id from mentis_staff where user_id=auth.uid())));
 create policy attendance_access on mentis_attendance_records for all using (session_id in (select id from mentis_sessions where organization_id in (select organization_id from mentis_staff where user_id=auth.uid())));
 create policy audit_admin_read on mentis_audit_log for select using (has_mentis_role(organization_id,'SUPER_ADMIN') or has_mentis_role(organization_id,'ADMIN'));
+

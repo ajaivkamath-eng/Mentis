@@ -3,160 +3,295 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { PageTitle } from '../lib/ui';
 
+export function getActiveRateCardsForStaff(staffId: string, rates: any[]) {
+  if (!staffId) return [];
+  const today = new Date().toISOString().slice(0, 10);
+  return rates.filter((r: any) => {
+    if (r.staff_id !== staffId) return false;
+    const startsOn = r.valid_from ?? '0000-00-00';
+    const endsOn = r.valid_to ?? '9999-12-31';
+    return startsOn <= today && endsOn >= today;
+  });
+}
+
+export function getDefaultRateCardId(staffId: string, rates: any[]) {
+  const active = getActiveRateCardsForStaff(staffId, rates);
+  if (!active.length) return '';
+
+  const standard = active
+    .filter((r: any) => r.label === 'Standard')
+    .sort((a: any, b: any) => (b.valid_from ?? '').localeCompare(a.valid_from ?? ''))[0];
+
+  const candidate = standard ?? [...active].sort((a: any, b: any) => (b.valid_from ?? '').localeCompare(a.valid_from ?? ''))[0];
+  return candidate?.id ?? '';
+}
+
 /* ---------- Session staffing: assign + availability/overlap guards ---------- */
 export function Staffing() {
   const { staff } = useAuth();
   const [sessions, setSessions] = useState<any[]>([]);
-  const [sessionId, setSessionId] = useState('');
   const [rows, setRows] = useState<any[]>([]);
   const [staffList, setStaffList] = useState<any[]>([]);
   const [rates, setRates] = useState<any[]>([]);
-  const [form, setForm] = useState({
-    staff_id: '',
-    capacity: 'assistant',
-    rate_card_id: '',
-    planned_start: '',
-    planned_end: '',
-  });
-  const [msg, setMsg] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [focusedCell, setFocusedCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
+  const [selection, setSelection] = useState<{ startRow: number; endRow: number; startCol: number; endCol: number } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null);
+  const [draftValue, setDraftValue] = useState('');
+
+  const columns = [
+    { key: 'session', label: 'Session / Blueprint', width: 220 },
+    { key: 'staff', label: 'Staff Member', width: 180 },
+    { key: 'role', label: 'Role', width: 150 },
+    { key: 'rate_card', label: 'Rate Card', width: 150 },
+    { key: 'from', label: 'From', width: 160 },
+    { key: 'to', label: 'To', width: 160 },
+    { key: 'status', label: 'Status', width: 120 },
+  ] as const;
+
   useEffect(() => {
-    supabase.from('mentis_sessions').select('id,name,start_at,end_at,status').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
-    supabase.from('mentis_staff').select('id,display_name').then(({ data }) => setStaffList(data ?? []));
-    supabase.from('mentis_rate_cards').select('id,label,rate_cents,staff_id').then(({ data }) => setRates(data ?? []));
+    const loadMeta = async () => {
+      const [{ data: sessionsData }, { data: staffData }, { data: ratesData }] = await Promise.all([
+        supabase.from('mentis_session_occurrences').select('id,name,start_at,end_at,status').order('start_at', { ascending: false }).limit(30),
+        supabase.from('mentis_staff').select('id,display_name').order('display_name'),
+        supabase.from('mentis_rate_cards').select('id,label,staff_id,rate_cents,valid_from,valid_to').order('valid_from', { ascending: false }),
+      ]);
+      setSessions(sessionsData ?? []);
+      setStaffList(staffData ?? []);
+      setRates(ratesData ?? []);
+    };
+    void loadMeta();
   }, []);
-  const load = () => {
-    if (!sessionId) return;
-    supabase.from('mentis_session_staffing').select('*,mentis_staff(display_name),mentis_rate_cards(label,rate_cents)').eq('session_id', sessionId).then(({ data }) => setRows(data ?? []));
-  };
-  useEffect(() => {
-    load();
-    const curr = sessions.find((s: any) => s.id === sessionId);
-    if (curr) {
-      setForm(f => ({
-        ...f,
-        planned_start: curr.start_at.slice(0, 16),
-        planned_end: curr.end_at.slice(0, 16),
-      }));
-    }
-  }, [sessionId]);
-  const session = sessions.find((s: any) => s.id === sessionId);
-  const selectedRate = rates.find((r: any) => r.id === form.rate_card_id);
-  const plannedHours = session && form.planned_start && form.planned_end
-    ? Math.max(0, (new Date(form.planned_end).getTime() - new Date(form.planned_start).getTime()) / 3_600_000)
-    : session ? (new Date(session.end_at).getTime() - new Date(session.start_at).getTime()) / 3_600_000 : 0;
-  const assign = async () => {
-    setMsg('');
-    if (!sessionId || !form.staff_id || !form.rate_card_id) { setMsg('Pick session, staff and rate card.'); return; }
-    const pStart = form.planned_start ? new Date(form.planned_start).toISOString() : session.start_at;
-    const pEnd = form.planned_end ? new Date(form.planned_end).toISOString() : session.end_at;
 
-    const { data: un } = await supabase.from('mentis_staff_availability').select('id, starts_at, ends_at, reason, availability_type').eq('staff_id', form.staff_id).eq('available', false)
-      .lt('starts_at', pEnd).gt('ends_at', pStart);
-
-    const { error } = await supabase.from('mentis_session_staffing').insert({
-      session_id: sessionId,
-      staff_id: form.staff_id,
-      capacity: form.capacity,
-      rate_card_id: form.rate_card_id,
-      planned_start: pStart,
-      planned_end: pEnd,
+  const loadRows = async () => {
+    const { data } = await supabase.from('mentis_session_staffing').select('*,mentis_staff(display_name),mentis_rate_cards(label,rate_cents)').order('planned_start', { ascending: false });
+    const mapped = (data ?? []).map((row: any) => {
+      const session = sessions.find((s: any) => s.id === row.session_id) ?? { name: 'Session' };
+      const staffName = row.mentis_staff?.display_name ?? 'Unassigned';
+      const rateLabel = row.mentis_rate_cards?.label ?? 'Standard';
+      const role = row.capacity ?? 'Assistant Coach';
+      const from = row.planned_start ? new Date(row.planned_start).toISOString().slice(0, 16) : '';
+      const to = row.planned_end ? new Date(row.planned_end).toISOString().slice(0, 16) : '';
+      const status = (() => {
+        if (!from || !to) return 'Assigned';
+        const matching = rows.filter((existing: any) => existing.staff === staffName && existing.id !== row.id);
+        const hasConflict = matching.some((existing: any) => {
+          const existingFrom = existing.from ? new Date(existing.from) : null;
+          const existingTo = existing.to ? new Date(existing.to) : null;
+          const candidateFrom = new Date(from);
+          const candidateTo = new Date(to);
+          return existingFrom && existingTo && candidateFrom < existingTo && candidateTo > existingFrom;
+        });
+        return hasConflict ? 'Conflict' : 'Assigned';
+      })();
+      return {
+        id: row.id,
+        session: session.name,
+        session_id: row.session_id,
+        staff: staffName,
+        staff_id: row.staff_id,
+        role,
+        rate_card: rateLabel,
+        rate_card_id: row.rate_card_id,
+        from,
+        to,
+        status,
+      };
     });
+    setRows(mapped);
+  };
 
-    if (!error && un?.length) {
-      const { data: actionType } = await supabase
-        .from('mentis_action_types')
-        .select('id')
-        .eq('organization_id', staff?.organization_id)
-        .eq('name', 'confirm staffing')
-        .limit(1);
+  useEffect(() => {
+    void loadRows();
+  }, [sessions]);
 
-      if (actionType?.[0]) {
-        const { data: existing } = await supabase
-          .from('mentis_pending_actions')
-          .select('id')
-          .eq('organization_id', staff?.organization_id)
-          .eq('linked_entity_type', 'session')
-          .eq('linked_entity_id', sessionId)
-          .eq('assignee_id', form.staff_id)
-          .eq('status', 'open')
-          .limit(1);
+  const addRow = () => {
+    const blank = {
+      id: '',
+      session: sessions[0]?.name ?? 'New session',
+      session_id: sessions[0]?.id ?? '',
+      staff: staffList[0]?.display_name ?? 'Unassigned',
+      staff_id: staffList[0]?.id ?? '',
+      role: 'Assistant Coach',
+      rate_card: 'Standard',
+      rate_card_id: rates.find((rate) => rate.label === 'Standard')?.id ?? '',
+      from: sessions[0]?.start_at ? new Date(sessions[0].start_at).toISOString().slice(0, 16) : '',
+      to: sessions[0]?.end_at ? new Date(sessions[0].end_at).toISOString().slice(0, 16) : '',
+      status: 'Assigned',
+    };
+    setRows((prev) => [...prev, blank]);
+    const rowIndex = rows.length;
+    setFocusedCell({ row: rowIndex, col: 0 });
+    setSelection({ startRow: rowIndex, endRow: rowIndex, startCol: 0, endCol: columns.length - 1 });
+  };
 
-        if (!existing?.length) {
-          const conflict = un[0];
-          const dueAt = new Date(pStart).toISOString();
-          const breachAt = new Date(new Date(pStart).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-          await supabase.from('mentis_pending_actions').insert({
-            organization_id: staff?.organization_id,
-            action_type_id: actionType[0].id,
-            title: `Staffing confirmation required: ${session?.name ?? 'session'} overlaps unavailable window`,
-            assignee_id: form.staff_id,
-            linked_entity_type: 'session',
-            linked_entity_id: sessionId,
-            due_at: dueAt,
-            breach_at: breachAt,
-            status: 'open',
-          });
+  const setCell = (rowIndex: number, key: string, raw: string) => {
+    const value = String(raw ?? '').trim();
+    setRows((prev) => prev.map((row, index) => {
+      if (index !== rowIndex) return row;
+      const next = { ...row };
+      if (key === 'session') next.session = value;
+      if (key === 'staff') next.staff = value;
+      if (key === 'role') next.role = value;
+      if (key === 'rate_card') next.rate_card = value;
+      if (key === 'from') next.from = value;
+      if (key === 'to') next.to = value;
+      const hasConflict = next.from && next.to && rows.some((existing: any) => existing.id !== next.id && existing.staff === next.staff && existing.from && existing.to && new Date(next.from) < new Date(existing.to) && new Date(next.to) > new Date(existing.from));
+      next.status = hasConflict ? 'Conflict' : 'Assigned';
+      return next;
+    }));
+  };
 
-          if (conflict.reason || conflict.availability_type) {
-            setMsg(`Warning: staff has a recorded unavailable window (${conflict.reason || conflict.availability_type}); a staffing confirmation alert was created.`);
-          }
+  const normalizeCapacity = (value?: string) => {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized.includes('assistant')) return 'assistant';
+    if (normalized.includes('lead')) return 'lead';
+    if (normalized.includes('sparrer') || normalized.includes('sparring')) return 'sparrer';
+    return 'assistant';
+  };
+
+  const saveChanges = async () => {
+    setSaveError(null);
+    try {
+      for (const row of rows) {
+        if (!row.staff_id && !row.staff) continue;
+        const sessionId = row.session_id || sessions.find((s: any) => s.name === row.session)?.id || '';
+        const staffId = row.staff_id || staffList.find((member: any) => member.display_name === row.staff)?.id || '';
+        const rateCardId = row.rate_card_id || rates.find((rate: any) => rate.label === row.rate_card)?.id || '';
+        const payload = {
+          session_id: sessionId,
+          staff_id: staffId,
+          capacity: normalizeCapacity(row.role),
+          rate_card_id: rateCardId,
+          planned_start: row.from ? new Date(row.from).toISOString() : null,
+          planned_end: row.to ? new Date(row.to).toISOString() : null,
+        };
+        if (!payload.session_id || !payload.staff_id || !payload.rate_card_id || !payload.planned_start || !payload.planned_end) continue;
+        if (row.id) {
+          const { error } = await supabase.from('mentis_session_staffing').update(payload).eq('id', row.id);
+          if (error) throw error;
+        } else {
+          const { data, error } = await supabase.from('mentis_session_staffing').insert(payload).select('id').single();
+          if (error) throw error;
+          if (data) row.id = data.id;
         }
       }
+      await loadRows();
+    } catch (error: any) {
+      console.error('Staffing save failed', error);
+      setSaveError(error?.message ?? 'Unable to save staffing changes.');
     }
+  };
 
-    if (!error) {
-      setMsg(un?.length ? 'Assigned. Unavailability conflict recorded and a follow-up alert created.' : 'Assigned.');
-    } else {
-      setMsg(`Blocked: ${error.message}`);
+  const removeRow = async (rowIndex: number) => {
+    const row = rows[rowIndex];
+    if (!row) return;
+    if (row.id) {
+      await supabase.from('mentis_session_staffing').delete().eq('id', row.id);
     }
-    load();
+    setRows((prev) => prev.filter((_, index) => index !== rowIndex));
+    await loadRows();
   };
-  const remove = async (id: string) => {
-    await supabase.from('mentis_session_staffing').delete().eq('id', id);
-    load();
+
+  const renderStatus = (value: string) => {
+    const map: Record<string, string> = {
+      Assigned: 'bg-emerald-100 text-emerald-700',
+      Conflict: 'bg-rose-100 text-rose-700',
+      Completed: 'bg-slate-200 text-slate-600',
+    };
+    return <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${map[String(value)] ?? 'bg-slate-100 text-slate-600'}`}>{value || 'Assigned'}</span>;
   };
+
+  const isSelected = (rowIndex: number, colIndex: number) => {
+    if (!selection) return focusedCell.row === rowIndex && focusedCell.col === colIndex;
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+    return rowIndex >= minRow && rowIndex <= maxRow && colIndex >= minCol && colIndex <= maxCol;
+  };
+
   return (
     <div>
       <PageTitle title="Staffing" sub="Assign coaches per session (split hours supported, overlap guarded, rule 21)" />
-      <div className="card p-4 mb-4 flex flex-wrap gap-2 items-end">
-        <select className="input" style={{ width: 240 }} value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
-          <option value="">Session…</option>{sessions.map((s: any) => <option key={s.id} value={s.id}>{s.name} — {new Date(s.start_at).toLocaleString()}</option>)}
-        </select>
-        <select className="input" style={{ width: 170 }} value={form.staff_id} onChange={(e) => setForm({ ...form, staff_id: e.target.value })}>
-          <option value="">Staff…</option>{staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
-        </select>
-        <select className="input" style={{ width: 130 }} value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })}>
-          <option value="lead">Lead</option><option value="assistant">Assistant</option><option value="sparrer">Sparrer</option>
-        </select>
-        <select className="input" style={{ width: 190 }} value={form.rate_card_id} onChange={(e) => setForm({ ...form, rate_card_id: e.target.value })}>
-          <option value="">Rate…</option>{rates.filter((r: any) => !form.staff_id || r.staff_id === form.staff_id).map((r: any) => <option key={r.id} value={r.id}>{r.label} £{(r.rate_cents / 100).toFixed(2)}/h</option>)}
-        </select>
-        <label className="text-xs">From <input type="datetime-local" className="input" value={form.planned_start} onChange={e => setForm({ ...form, planned_start: e.target.value })} /></label>
-        <label className="text-xs">To <input type="datetime-local" className="input" value={form.planned_end} onChange={e => setForm({ ...form, planned_end: e.target.value })} /></label>
-        <button className="btn btn-primary" onClick={assign}>Assign</button>
-        {msg && <span className="text-sm font-semibold text-danger">{msg}</span>}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100" onClick={addRow}>[+] Add Row</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">[Copy]</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">[Cut]</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">[Paste]</button>
+        <button type="button" className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100" onClick={() => rows.length && void removeRow(focusedCell.row)}>Delete Row</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Sort A-Z</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Filter</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Undo</button>
+        <button type="button" className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Redo</button>
+        <button type="button" className="ml-auto rounded-md bg-[#3a53d8] px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-[#2d45c7]" onClick={() => void saveChanges()}>Save Changes</button>
       </div>
-
-      {selectedRate && (
-        <div className="card p-3 mb-4 text-sm">
-          Selected rate card: <span className="font-bold">{selectedRate.label}</span> · £{((selectedRate.rate_cents ?? 0) / 100).toFixed(2)}/h · projected cost: £{(((selectedRate.rate_cents ?? 0) / 100) * plannedHours).toFixed(2)}
-        </div>
-      )}
-
-      <div className="card p-2"><table className="grid">
-        <thead><tr><th>Staff</th><th>Capacity</th><th>Planned</th><th>Rate</th><th></th></tr></thead>
-        <tbody>{rows.map((r: any) => {
-          const rate = r.mentis_rate_cards ?? r.rate_cards;
-          const hours = Math.max(0, (new Date(r.planned_end).getTime() - new Date(r.planned_start).getTime()) / 3_600_000);
-          return (
-            <tr key={r.id}><td className="font-semibold">{r.mentis_staff?.display_name}</td><td>{r.capacity}</td>
-              <td>{new Date(r.planned_start).toLocaleString()} → {new Date(r.planned_end).toLocaleTimeString()}</td>
-              <td>{rate?.label ?? 'No card'} £{((rate?.rate_cents ?? 0) / 100).toFixed(2)}/h · est £{(((rate?.rate_cents ?? 0) / 100) * hours).toFixed(2)}</td>
-              <td><button className="btn btn-ghost" onClick={() => remove(r.id)}>Remove</button></td></tr>
-          );
-        })}</tbody>
-      </table></div>
-      <p className="text-xs mt-2" style={{ color: 'var(--ink-muted)' }}>Org: {staff?.organization_id}</p>
+      {saveError && <div className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{saveError}</div>}
+      <div className="card overflow-auto rounded-[18px] border-[2px] border-[#3a53d8] bg-white p-2" style={{ userSelect: 'none', WebkitUserSelect: 'none', msUserSelect: 'none', MozUserSelect: 'none' }}>
+        <table className="min-w-[1000px] w-full border-collapse">
+          <thead>
+            <tr>
+              <th className="w-12 min-w-[48px] border border-slate-200 bg-slate-100 px-1 py-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">#</th>
+              {columns.map((column) => (
+                <th key={column.key} className="border border-slate-200 bg-slate-100 px-2 py-2 text-left text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600" style={{ width: column.width }}>
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={row.id || `new-staff-row-${rowIndex}`} className="align-top">
+                <td className="select-none border border-slate-200 bg-slate-50 px-1 py-1 text-center text-[11px] font-semibold text-slate-500">{rowIndex + 1}</td>
+                {columns.map((column, colIndex) => {
+                  const value = row[column.key];
+                  const isActiveCell = focusedCell.row === rowIndex && focusedCell.col === colIndex;
+                  const isHighlight = isSelected(rowIndex, colIndex);
+                  const hasConflict = row.status === 'Conflict';
+                  return (
+                    <td
+                      key={`${column.key}-${rowIndex}`}
+                      className={`border border-slate-200 px-2 py-1 text-sm ${isHighlight ? 'bg-blue-50' : 'bg-white'} ${hasConflict && column.key === 'status' ? 'shadow-[inset_0_0_0_1px_rgba(239,68,68,0.8)]' : ''}`}
+                      style={{ minWidth: column.width }}
+                      onClick={() => { setFocusedCell({ row: rowIndex, col: colIndex }); setSelection({ startRow: rowIndex, endRow: rowIndex, startCol: colIndex, endCol: colIndex }); }}
+                      onDoubleClick={() => {
+                        setEditingCell({ row: rowIndex, col: colIndex });
+                        setDraftValue(String(value ?? ''));
+                      }}
+                    >
+                      {editingCell?.row === rowIndex && editingCell?.col === colIndex ? (
+                        <input
+                          autoFocus
+                          value={draftValue}
+                          onChange={(event) => setDraftValue(event.target.value)}
+                          onBlur={() => {
+                            setCell(rowIndex, column.key, draftValue);
+                            setEditingCell(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              setCell(rowIndex, column.key, draftValue);
+                              setEditingCell(null);
+                              setFocusedCell({ row: Math.min(rows.length - 1, rowIndex + 1), col: colIndex });
+                            }
+                            if (event.key === 'Escape') setEditingCell(null);
+                          }}
+                          className="w-full border-none bg-transparent text-sm text-slate-800 outline-none"
+                          type={column.key === 'from' || column.key === 'to' ? 'datetime-local' : 'text'}
+                        />
+                      ) : (
+                        <div className={`flex min-h-[28px] items-center ${isActiveCell ? 'rounded-sm ring-2 ring-[#3a53d8]' : ''}`}>
+                          {column.key === 'status' ? renderStatus(String(value || 'Assigned')) : (value ?? '—')}
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -171,7 +306,7 @@ export function SessionClose() {
   const [done, setDone] = useState<string[]>([]);
   const [msg, setMsg] = useState('');
   useEffect(() => {
-    supabase.from('mentis_sessions').select('id,name,start_at,end_at,status').eq('status', 'scheduled').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_session_occurrences').select('id,name,start_at,end_at,status').eq('status', 'scheduled').order('start_at', { ascending: false }).limit(30).then(({ data }) => setSessions(data ?? []));
   }, []);
   const load = async () => {
     if (!sessionId) return;
@@ -197,7 +332,7 @@ export function SessionClose() {
   };
   const complete = async () => {
     if (rows.length && !rows.every((r: any) => done.includes(r.staff_id))) { setMsg('Log actuals for all staff first (or remove them).'); return; }
-    await supabase.from('mentis_sessions').update({ status: 'completed' }).eq('id', sessionId);
+    await supabase.from('mentis_session_occurrences').update({ status: 'completed' }).eq('id', sessionId);
     setMsg('Session completed.');
   };
   return (

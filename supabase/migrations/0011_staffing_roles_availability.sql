@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0011_staffing_roles_availability.sql';
+END $$;
+
+
 -- 0011_staffing_roles_availability.sql
 -- Add coaching roles (responsible, leading, assisting, sparrers),
 -- partial / split session staffing intervals, enriched availability kinds,
@@ -13,13 +19,13 @@ alter table mentis_weekly_schedules add column if not exists leading_coach_id uu
 alter table mentis_weekly_schedules add column if not exists assisting_coach_id uuid references mentis_staff(id);
 
 -- 2. Availability categories for staff personal diaries:
--- 'available', 'on_duty', 'holiday', 'duty_outside_club', 'unavailable_other'
+-- 'available', 'on_duty', 'holiday', 'vacation', 'duty_outside_club', 'unavailable_other'
 do $$ begin
   if not exists (select 1 from pg_type where typname = 'staff_availability_type') then
     create type staff_availability_type as enum (
       'available',
       'on_duty',
-      'holiday',
+      'vacation',
       'duty_outside_club',
       'unavailable_other'
     );
@@ -49,7 +55,7 @@ begin
       and ss.planned_start < new.planned_end
       and new.planned_start < ss.planned_end;
   if clash > 0 then
-    raise exception 'staff member already has an overlapping session assignment';
+    raise exception '%: staff member already has an overlapping session assignment', '0011_staffing_roles_availability.sql';
   end if;
   return new;
 end $$;
@@ -82,3 +88,4 @@ where sa.available = false
   and s.status <> 'cancelled'
   and ss.planned_start < sa.ends_at
   and sa.starts_at < ss.planned_end;
+

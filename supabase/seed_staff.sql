@@ -1,5 +1,29 @@
--- Link actual Supabase auth users to Mentis roles
--- The users below were created manually in Supabase Auth.
+-- Link demo auth users to Mentis roles. These IDs are seeded into auth.users so
+-- the session publication flow can resolve created_by / auth.uid() without any
+-- missing foreign-key errors during local or migrated seed runs.
+insert into auth.users (
+  id, email, encrypted_password, email_confirmed_at, created_at, updated_at,
+  raw_app_meta_data, raw_user_meta_data, aud, role
+) values
+  ('0442d43f-4fd2-4601-9e21-36d76e5f542e', 'jack@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('171cf5d2-9a8b-4603-83d1-d6d7d035edaf', 'richard@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('39ddd06f-dd1b-4728-8338-462dcbfec13a', 'ajay@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('42b5ea6d-599a-43c5-afd8-a1d21c266274', 'daniel@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('47d0502f-f74e-4ca4-be38-76e0a55f17c2', 'jordan@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('4a081fea-2dc5-4b8b-99a2-3cd301f51303', 'raj@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('54259e05-3387-4bc5-a523-fe655855c3fd', 'marcel@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('834541c9-368d-48bc-b0b9-d0fc1c94840d', 'alex@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('8a317616-c21a-427a-95b0-711c9c1e159a', 'john@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('ab3137ee-aacb-4c31-9884-a6c8dd84c306', 'noah@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('ae404089-45eb-4b0e-9ded-4572c0ce4be8', 'sam@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('be879af1-3ca3-47fb-97c3-105469adefd5', 'liam@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('e725980b-f092-422c-8c30-001e559a949a', 'ethan@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('f03c0e26-7601-4d77-9496-b1bd289980a0', 'mason@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('fa6f0ced-08dd-43cf-a1d7-4a46b9ba36ff', 'martin@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('fd2bf0bd-05a5-4a66-be8e-a9a38ac7164d', 'oliver@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated'),
+  ('be474d37-90d7-4807-a5ce-28882dff3e2f', 'ajai@kingfisher.example', '', now(), now(), now(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated')
+on conflict (id) do nothing;
+
 insert into mentis_staff (organization_id, user_id, roles, display_name) values
   ('00000000-0000-0000-0000-000000000001', '0442d43f-4fd2-4601-9e21-36d76e5f542e', array['COACH']::mentis_role[], 'Jack'),
   ('00000000-0000-0000-0000-000000000001', '171cf5d2-9a8b-4603-83d1-d6d7d035edaf', array['COACH']::mentis_role[], 'Richard'),
@@ -17,5 +41,7 @@ insert into mentis_staff (organization_id, user_id, roles, display_name) values
   ('00000000-0000-0000-0000-000000000001', 'f03c0e26-7601-4d77-9496-b1bd289980a0', array['SPARRER']::mentis_role[], 'Mason'),
   ('00000000-0000-0000-0000-000000000001', 'fa6f0ced-08dd-43cf-a1d7-4a46b9ba36ff', array['ADMIN']::mentis_role[], 'Martin'),
   ('00000000-0000-0000-0000-000000000001', 'fd2bf0bd-05a5-4a66-be8e-a9a38ac7164d', array['COACH']::mentis_role[], 'Oliver'),
-  ('00000000-0000-0000-0000-000000000001', 'be474d37-90d7-4807-a5ce-28882dff3e2f', array['ADMIN']::mentis_role[], 'Abdul')
+  ('00000000-0000-0000-0000-000000000001', 'be474d37-90d7-4807-a5ce-28882dff3e2f', array['SUPER_ADMIN']::mentis_role[], 'Ajai Kamath')
 on conflict (organization_id, user_id) do update set roles = excluded.roles, display_name = excluded.display_name;
+
+

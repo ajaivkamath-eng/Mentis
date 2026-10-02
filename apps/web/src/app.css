@@ -626,21 +626,24 @@
     display: flex;
     align-items: center;
     gap: 0.7rem;
-    padding: 0.45rem 0.7rem;
+    padding: 0.48rem 0.72rem;
     border-radius: var(--radius-md);
     color: var(--ink-muted);
     font-weight: 550;
     font-size: 0.8125rem;
+    border: 1px solid transparent;
     transition: color 150ms var(--ease-standard), background-color 150ms var(--ease-standard),
-      transform 150ms var(--ease-standard);
+      transform 150ms var(--ease-standard), border-color 150ms var(--ease-standard), box-shadow 150ms var(--ease-standard);
   }
   .navlink:hover {
-    background: var(--surface-hover);
+    background: linear-gradient(180deg, color-mix(in oklab, var(--surface-hover) 82%, transparent), var(--surface-hover));
     color: var(--ink);
-    transform: translateX(1px);
+    border-color: color-mix(in oklab, var(--border-strong) 70%, transparent);
+    transform: translateX(2px);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 10%, transparent);
   }
   .navlink svg { opacity: 0.85; transition: transform 200ms var(--ease-standard), opacity 150ms; }
-  .navlink:hover svg { opacity: 1; transform: scale(1.06); }
+  .navlink:hover svg { opacity: 1; transform: scale(1.08); }
   /* The active *background* is painted by the sliding Framer Motion pill
      (layoutId) in NavList; the class only sets type colour + weight. */
   .navlink.active {

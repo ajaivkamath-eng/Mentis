@@ -1,7 +1,13 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0002_scheduling_billing.sql';
+END $$;
+
+
 -- Mentis foundation: scheduling, staffing and auditable billing
 create type session_status as enum ('scheduled','cancelled','postponed','completed');
 create type holiday_kind as enum ('term_break','bank_holiday','manual');
-create type staff_availability_type as enum ('available','on_duty','holiday','duty_outside_club','unavailable_other');
+create type staff_availability_type as enum ('available','on_duty','vacation','duty_outside_club','unavailable_other');
 create type time_entry_kind as enum ('planned','actual','standby');
 create type invoice_status as enum ('draft','pendingApproval','approved','paid');
 create type action_status as enum ('open','breached','closed');
@@ -10,7 +16,7 @@ alter table mentis_sessions add column status session_status not null default 's
 alter table mentis_sessions add column schedule_id uuid;
 create table mentis_holiday_calendar (id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id), name text not null, kind holiday_kind not null, starts_on date not null, ends_on date not null, check(ends_on >= starts_on));
 create table mentis_weekly_schedules (id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id), venue_id uuid not null references mentis_venues(id), name text not null, day_of_week smallint not null check(day_of_week between 0 and 6), valid_from date not null, valid_to date not null, start_time time not null, end_time time not null, check(valid_to >= valid_from), check(end_time > start_time));
-create table mentis_rate_cards (id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id), staff_id uuid not null references mentis_staff(id), label text not null, rate_cents integer not null check(rate_cents >= 0), valid_from date not null);
+create table mentis_rate_cards (id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id), staff_id uuid not null references mentis_staff(id), label text not null, rate_cents integer not null check(rate_cents >= 0), valid_from date not null, valid_to date, check(valid_to is null or valid_to >= valid_from));
 create table mentis_schedule_staff (schedule_id uuid not null references mentis_weekly_schedules(id) on delete cascade, staff_id uuid not null references mentis_staff(id), capacity text not null check(capacity in ('lead','assistant','sparrer')), rate_card_id uuid not null references mentis_rate_cards(id), primary key(schedule_id,staff_id,capacity));
 create table mentis_schedule_overrides (id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id), schedule_id uuid references mentis_weekly_schedules(id), session_id uuid references mentis_sessions(id), starts_at timestamptz not null, ends_at timestamptz not null, venue_id uuid references mentis_venues(id), original_values jsonb not null default '{}', override_values jsonb not null, created_by uuid not null, created_at timestamptz not null default now(), check(ends_at > starts_at), check(schedule_id is not null or session_id is not null));
 create table mentis_session_staffing (id uuid primary key default gen_random_uuid(), session_id uuid not null references mentis_sessions(id) on delete cascade, staff_id uuid not null references mentis_staff(id), capacity text not null check(capacity in ('lead','assistant','sparrer')), rate_card_id uuid not null references mentis_rate_cards(id), planned_start timestamptz not null, planned_end timestamptz not null, unique(session_id,staff_id,capacity,planned_start), check(planned_end > planned_start));
@@ -26,7 +32,7 @@ create index sessions_schedule_idx on mentis_sessions(schedule_id); create index
 
 -- Prevent changing or deleting approved mentis_invoices and their lines.
 create or replace function prevent_locked_invoice_change() returns trigger language plpgsql as $$
-begin if exists(select 1 from mentis_invoices where id=case when TG_TABLE_NAME = 'mentis_invoice_lines' then old.invoice_id else old.id end and status in ('approved','paid')) then raise exception 'approved invoice is locked'; end if; if TG_OP = 'DELETE' then return old; else return new; end if; end $$;
+begin if exists(select 1 from mentis_invoices where id=case when TG_TABLE_NAME = 'mentis_invoice_lines' then old.invoice_id else old.id end and status in ('approved','paid')) then raise exception '%: approved invoice is locked', '0002_scheduling_billing.sql'; end if; if TG_OP = 'DELETE' then return old; else return new; end if; end $$;
 create trigger invoice_lock before update or delete on mentis_invoices for each row execute function prevent_locked_invoice_change();
 create trigger invoice_line_lock before update or delete on mentis_invoice_lines for each row execute function prevent_locked_invoice_change();
 
@@ -45,3 +51,4 @@ create policy invoice_access on mentis_invoices for all using (organization_id i
 create policy invoice_line_access on mentis_invoice_lines for all using (invoice_id in (select id from mentis_invoices where organization_id in (select organization_id from mentis_staff where user_id=auth.uid())));
 create policy action_type_access on mentis_action_types for all using (organization_id in (select organization_id from mentis_staff where user_id=auth.uid()));
 create policy action_access on mentis_pending_actions for all using (organization_id in (select organization_id from mentis_staff where user_id=auth.uid()));
+

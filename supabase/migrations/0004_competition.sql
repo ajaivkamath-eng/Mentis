@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0004_competition.sql';
+END $$;
+
+
 -- Mentis competition: org-level diary (rule 14), entries, mentis_matches, mentis_rankings, feedback.
 create table mentis_events (
   id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id),
@@ -52,3 +58,4 @@ create index entries_member_idx on mentis_event_entries(member_id, status);
 create index matches_member_idx on mentis_matches(member_id, played_on desc);
 create index rankings_member_idx on mentis_rankings(member_id, platform, as_of desc);
 create index feedback_member_idx on mentis_player_feedback(member_id, created_at desc);
+

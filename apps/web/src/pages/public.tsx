@@ -8,7 +8,7 @@ export function PublicTaster() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [done, setDone] = useState('');
   useEffect(() => {
-    supabase.from('mentis_sessions').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(10).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_session_occurrences').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(10).then(({ data }) => setSessions(data ?? []));
   }, []);
   const submit = async () => {
     const r = await fetch(functionsUrl('taster-form'), { method: 'POST', headers: { 'Content-Type': 'application/json' },

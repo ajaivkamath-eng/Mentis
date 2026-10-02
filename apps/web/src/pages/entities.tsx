@@ -58,7 +58,7 @@ import {
   StatCard,
   StatGrid,
 } from '../components/ui';
-import { csvOf } from '@mentis/core';
+import { csvOf, TAG_TYPE_DEFINITIONS } from '@mentis/core';
 
 /* -------------------------------------------------------------------------- *
  * People model helpers
@@ -231,7 +231,7 @@ function memberFromRaw(row: any, stats?: { attendance?: any[]; enrollments?: any
   const sortedAttendance = [...attendance].sort((a: any, b: any) => String(b.recorded_at ?? b.date ?? '').localeCompare(String(a.recorded_at ?? a.date ?? '')));
   const enrollments = stats?.enrollments ?? [];
   const nextEnrollment = enrollments
-    .map((item: any) => firstRelation(item.mentis_sessions ?? item.sessions))
+    .map((item: any) => firstRelation(item.mentis_session_occurrences ?? item.sessions))
     .filter((session: any) => session?.start_at && new Date(session.start_at).getTime() >= Date.now())
     .sort((a: any, b: any) => String(a.start_at).localeCompare(String(b.start_at)))[0];
   const alert = row.special_needs_flag ? 'Support note on file' : attendancePct > 0 && attendancePct < 70 ? 'Attendance needs attention' : undefined;
@@ -325,7 +325,7 @@ function exportRows(filename: string, rows: Record<string, string | number>[]) {
 async function loadMembersFromSupabase(organizationId?: string) {
   const memberQuery: any = supabase
     .from('mentis_members')
-    .select('id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at,mentis_customers(id,name,phone,email)')
+    .select('id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at,mentis_customers!customer_id_fkey(id,name,phone,email)')
     .order('name');
   if (organizationId) memberQuery.eq('organization_id', organizationId);
 
@@ -346,7 +346,7 @@ async function loadMembersFromSupabase(organizationId?: string) {
 async function loadCustomersFromSupabase(organizationId?: string) {
   const query: any = supabase
     .from('mentis_customers')
-    .select('id,name,phone,email,guardian_a,guardian_b,nok_name,nok_phone,consents,created_at,updated_at,mentis_members(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)')
+    .select('id,name,phone,email,guardian_a,guardian_b,nok_name,nok_phone,consents,created_at,updated_at,mentis_members!customer_id_fkey(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)')
     .order('name');
   if (organizationId) query.eq('organization_id', organizationId);
   const { data, error } = await query;
@@ -425,6 +425,11 @@ export function Members() {
   const [filter, setFilter] = useState<FilterValue>('all');
   const [sort, setSort] = useState<'name' | 'attendance' | 'recent'>('name');
   const [view, setView] = useState<'table' | 'cards'>('table');
+  const [selectedTagType, setSelectedTagType] = useState('');
+  const [selectedTagValue, setSelectedTagValue] = useState('');
+  const [tagTypes, setTagTypes] = useState<any[]>([]);
+  const [tagValues, setTagValues] = useState<any[]>([]);
+  const [taggedMemberIds, setTaggedMemberIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -455,6 +460,56 @@ export function Members() {
     };
   }, [demo, reloadKey, staff?.organization_id]);
 
+  useEffect(() => {
+    if (demo) {
+      const demoTagTypes = TAG_TYPE_DEFINITIONS.filter((tag) => tag.scope === 'member');
+      setTagTypes(demoTagTypes);
+      setTagValues(TAG_TYPE_DEFINITIONS.flatMap((tag) => tag.options.map((option) => ({
+        id: `${tag.scope}:${tag.code}:${option.code}`,
+        tag_type_id: tag.code,
+        label: option.label,
+        code: option.code,
+      }))));
+      return;
+    }
+
+    const loadTaxonomy = async () => {
+      const [tagTypeResult, tagValueResult] = await Promise.all([
+        supabase.from('mentis_tag_types').select('*').eq('scope', 'member').eq('is_active', true).order('sort_order', { ascending: true }),
+        supabase.from('mentis_tag_values').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
+      ]);
+      setTagTypes(tagTypeResult.data ?? []);
+      setTagValues(tagValueResult.data ?? []);
+    };
+    void loadTaxonomy();
+  }, [demo]);
+
+  useEffect(() => {
+    if (!selectedTagType && !selectedTagValue) {
+      setTaggedMemberIds(new Set());
+      return;
+    }
+    if (demo) {
+      setTaggedMemberIds(new Set());
+      return;
+    }
+
+    let cancelled = false;
+    const loadTaggedMemberIds = async () => {
+      const query = supabase.from('mentis_entity_tags').select('entity_id').eq('entity_type', 'member');
+      const { data, error } = selectedTagValue
+        ? await query.eq('tag_value_id', selectedTagValue)
+        : await query.eq('tag_type_id', selectedTagType);
+      if (!cancelled && !error) {
+        setTaggedMemberIds(new Set((data ?? []).map((row: any) => row.entity_id)));
+      }
+    };
+    void loadTaggedMemberIds();
+    return () => {
+      cancelled = true;
+    };
+  }, [demo, selectedTagType, selectedTagValue]);
+
   const counts = useMemo(() => ({
     all: rows.length,
     active: rows.filter((row) => row.status === 'active').length,
@@ -462,18 +517,24 @@ export function Members() {
     inactive: rows.filter((row) => row.status === 'inactive').length,
   }), [rows]);
 
+  const availableTagValues = useMemo(
+    () => (selectedTagType ? tagValues.filter((value: any) => value.tag_type_id === selectedTagType) : []),
+    [selectedTagType, tagValues],
+  );
+
   const filteredRows = useMemo(() => {
     const next = rows.filter((member) => {
       const matchesSearch = !query || memberFilterMatch(member, query);
       const matchesFilter = filter === 'all' || (filter === 'attention' ? member.status === 'atRisk' || member.specialNeedsFlag : member.status === filter);
-      return matchesSearch && matchesFilter;
+      const matchesTag = !selectedTagType && !selectedTagValue || taggedMemberIds.has(member.id);
+      return matchesSearch && matchesFilter && matchesTag;
     });
     return next.sort((a, b) => {
       if (sort === 'attendance') return b.attendancePct - a.attendancePct;
       if (sort === 'recent') return String(b.lastAttended ?? '').localeCompare(String(a.lastAttended ?? ''));
       return a.name.localeCompare(b.name);
     });
-  }, [filter, query, rows, sort]);
+  }, [filter, query, rows, selectedTagType, selectedTagValue, sort, taggedMemberIds]);
 
   const averageAttendance = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.attendancePct, 0) / rows.length) : 0;
   const attentionRows = rows.filter((row) => row.status === 'atRisk' || row.specialNeedsFlag).sort((a, b) => a.attendancePct - b.attendancePct);
@@ -523,6 +584,24 @@ export function Members() {
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
             <InputWithIcon value={query} onChange={(event) => setQuery(event.target.value)} onClear={() => setQuery('')} icon={<Search />} placeholder="Search name, member code, customer…" aria-label="Search members" className="sm:max-w-md" />
+            {tagTypes.length > 0 && (
+              <>
+                <select className="input py-1.5" value={selectedTagType} onChange={(event) => {
+                  setSelectedTagType(event.target.value);
+                  setSelectedTagValue('');
+                }} aria-label="Member tag type filter">
+                  <option value="">All tag types</option>
+                  {tagTypes.map((tagType: any) => <option key={tagType.id ?? tagType.code} value={tagType.id ?? tagType.code}>{tagType.label}</option>)}
+                </select>
+                <select className="input py-1.5" value={selectedTagValue} onChange={(event) => setSelectedTagValue(event.target.value)} disabled={!selectedTagType} aria-label="Member tag value filter">
+                  <option value="">All values</option>
+                  {availableTagValues.map((value: any) => <option key={value.id} value={value.id}>{value.label}</option>)}
+                </select>
+                {(selectedTagType || selectedTagValue) && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setSelectedTagType(''); setSelectedTagValue(''); }}>Clear tags</button>
+                )}
+              </>
+            )}
             <div className="flex items-center gap-2 text-xs text-ink-faint">
               <Filter className="size-3.5" aria-hidden />
               <span className="hidden sm:inline">Show</span>
@@ -552,7 +631,7 @@ export function Members() {
             </div>
           </div>
         </div>
-        {(query || filter !== 'all') && <div className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-xs text-ink-muted"><span>Showing {filteredRows.length} of {rows.length}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters <X className="size-3" /></button></div>}
+        {(query || filter !== 'all' || selectedTagType || selectedTagValue) && <div className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-xs text-ink-muted"><span>Showing {filteredRows.length} of {rows.length}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQuery(''); setFilter('all'); setSelectedTagType(''); setSelectedTagValue(''); }}>Clear filters <X className="size-3" /></button></div>}
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -727,7 +806,7 @@ export function Customer360() {
     }
 
     const load = async () => {
-      const query: any = supabase.from('mentis_customers').select('*,mentis_members(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)').eq('id', id).limit(1).single();
+      const query: any = supabase.from('mentis_customers').select('*,mentis_members!customer_id_fkey(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)').eq('id', id).limit(1).single();
       if (staff?.organization_id) query.eq('organization_id', staff.organization_id);
       const { data, error: customerError } = await query;
       if (customerError) throw new Error(customerError.message);
@@ -784,7 +863,7 @@ function attendanceFromDemo(member: (typeof DEMO_MEMBERS)[number]): DemoAttendan
 }
 
 function normalizeAttendance(rows: any[], member: MemberRow): DemoAttendance[] {
-  return rows.map((row: any) => ({ id: row.id, date: row.recorded_at ?? row.date, session: firstRelation(row.mentis_sessions ?? row.sessions)?.name ?? 'Session', venue: firstRelation(firstRelation(row.mentis_sessions ?? row.sessions)?.mentis_venues)?.name ?? 'Venue not set', coach: row.coach ?? 'Coach', status: row.status }));
+  return rows.map((row: any) => ({ id: row.id, date: row.recorded_at ?? row.date, session: firstRelation(row.mentis_session_occurrences ?? row.sessions)?.name ?? 'Session', venue: firstRelation(firstRelation(row.mentis_session_occurrences ?? row.sessions)?.mentis_venues)?.name ?? 'Venue not set', coach: row.coach ?? 'Coach', status: row.status }));
 }
 
 function memberActivityFromProfile(member: MemberRow, attendance: DemoAttendance[], goals: DemoGoal[], feedback: { id: string; date: string; body: string; coach: string }[]): ActivityItem[] {
@@ -835,17 +914,17 @@ export function Member360() {
     }
 
     const load = async () => {
-      const memberQuery: any = supabase.from('mentis_members').select('*,mentis_customers(*)').eq('id', id).limit(1).single();
+      const memberQuery: any = supabase.from('mentis_members').select('*,mentis_customers!customer_id_fkey(*)').eq('id', id).limit(1).single();
       if (staff?.organization_id) memberQuery.eq('organization_id', staff.organization_id);
       const { data: rawMember, error: memberError } = await memberQuery;
       if (memberError) throw new Error(memberError.message);
       const [attendanceResult, rankingResult, matchResult, feedbackResult, goalsResult, enrollmentResult] = await Promise.all([
-        supabase.from('mentis_attendance_records').select('id,status,recorded_at,session_id,mentis_sessions(name,start_at,mentis_venues(name))').eq('member_id', id).order('recorded_at', { ascending: false }).limit(100),
+        supabase.from('mentis_attendance_records').select('id,status,recorded_at,session_id,mentis_session_occurrences(name,start_at,mentis_venues(name))').eq('member_id', id).order('recorded_at', { ascending: false }).limit(100),
         supabase.from('mentis_rankings').select('platform,rank_value,as_of').eq('member_id', id).order('as_of', { ascending: false }).limit(20),
         supabase.from('mentis_matches').select('id,played_on,opponent,result,source').eq('member_id', id).order('played_on', { ascending: false }).limit(20),
         supabase.from('mentis_player_feedback').select('id,body,created_at,coach_id').eq('member_id', id).order('created_at', { ascending: false }).limit(20),
         supabase.from('mentis_member_goals').select('id,description,status,target_date,goal_type').eq('member_id', id).order('target_date'),
-        supabase.from('mentis_enrollments').select('status,expected,session_id,mentis_sessions(id,name,start_at,mentis_venues(name))').eq('member_id', id).limit(50),
+        supabase.from('mentis_enrollments').select('status,expected,session_id,mentis_session_occurrences(id,name,start_at,mentis_venues(name))').eq('member_id', id).limit(50),
       ]);
       const attendance = normalizeAttendance(attendanceResult.data ?? [], memberFromRaw(rawMember));
       const member = memberFromRaw(rawMember, { attendance: attendanceResult.data ?? [], enrollments: enrollmentResult.data ?? [] });
@@ -899,7 +978,7 @@ export function Tasters() {
   const load = () => supabase.from('mentis_prospects').select('*').order('created_at', { ascending: false }).then(({ data }) => setRows(data ?? []));
   useEffect(() => {
     load();
-    supabase.from('mentis_sessions').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(20).then(({ data }) => setSessions(data ?? []));
+    supabase.from('mentis_session_occurrences').select('id,name,start_at').eq('status', 'scheduled').order('start_at').limit(20).then(({ data }) => setSessions(data ?? []));
   }, []);
   const approve = async (t: any, sessionId: string) => {
     if (!sessionId) return;

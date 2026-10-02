@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0006_rls_matrix.sql';
+END $$;
+
+
 -- Mentis RLS matrix: per-entity × role × command (§4, rule 15/25).
 -- Security floor = UNION of the user's roles; the role switcher only narrows the UI.
 -- Drop the broad bootstrap policies first.
@@ -272,3 +278,4 @@ create policy device_admin on mentis_devices for all using (exists (
 
 -- Audit log: admin reads; writes via triggers/service role only.
 create policy audit_select on mentis_audit_log for select using (is_admin(organization_id));
+

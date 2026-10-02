@@ -9,7 +9,7 @@
 BEGIN;
 
 -- Two sample blueprints, built from the seeded Kingfisher org.
-insert into mentis_session_templates (
+insert into mentis_sessions (
   organization_id, code, name, description, venue_id,
   default_start_time, default_end_time, timezone,
   level_band, capacity, min_headcount, default_charge_cents,
@@ -30,7 +30,7 @@ cross join (values
 ) as v(code, name, description, start_time, end_time, level_band, capacity, charge_cents, tags)
 where o.name = 'Kingfisher Table Tennis Club'
   and not exists (
-    select 1 from mentis_session_templates t
+    select 1 from mentis_sessions t
     where t.organization_id = o.id and t.name = v.name and t.venue_id = ven.id
   );
 
@@ -41,7 +41,7 @@ select t.id, s.capacity,
   (select rc.id from mentis_rate_cards rc
      where rc.staff_id = t.leading_coach_id order by rc.valid_from desc limit 1),
   s.required, s.lead_minutes, s.trail_minutes
-from mentis_session_templates t
+from mentis_sessions t
 cross join (values ('lead', true, 15, 0), ('sparrer', false, 0, 0)) as s(capacity, required, lead_minutes, trail_minutes)
 where t.leading_coach_id is not null
 on conflict do nothing;
@@ -49,7 +49,7 @@ on conflict do nothing;
 -- Default roster: the first six members of the organisation.
 insert into mentis_session_template_members (template_id, member_id)
 select t.id, m.id
-from mentis_session_templates t
+from mentis_sessions t
 join lateral (
   select id from mentis_members mm
   where mm.organization_id = t.organization_id and mm.erased_at is null
@@ -79,7 +79,7 @@ begin
     select tp.id, tp.name, tp.status, tp.timezone,
            -- Monday for the U13 blueprint, Wednesday for the adult evening one
            case when tp.default_start_time >= '19:00' then 3 else 1 end as weekday
-    from mentis_session_templates tp
+    from mentis_sessions tp
     where tp.code in ('U13-MON', 'ADULT-WED') and tp.status <> 'archived'
   loop
     if exists (select 1 from mentis_session_series s where s.template_id = t.id and s.status <> 'ended') then

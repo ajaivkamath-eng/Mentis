@@ -100,10 +100,10 @@ describe('regular availability planner', () => {
 });
 
 describe('conflict detection', () => {
-  it('reports holiday vs session with the required message and overlap', () => {
+  it('reports vacation vs session with the required message and overlap', () => {
     const holiday = ev({
-      id: 'h1', staffId: 'a', staffName: 'Priya', kind: 'holiday',
-      title: 'Holiday / annual leave', sourceType: 'manual',
+      id: 'h1', staffId: 'a', staffName: 'Priya', kind: 'vacation',
+      title: 'Vacation', sourceType: 'manual',
       start: '2026-10-05T16:00:00Z', end: '2026-10-05T18:00:00Z',
     });
     const session = ev({
@@ -115,13 +115,13 @@ describe('conflict detection', () => {
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].overlapMinutes).toBe(60);
     expect(conflicts[0].message).toBe(
-      'Priya is unavailable from 16:00 to 18:00 because of Holiday / annual leave. ' +
+      'Priya is unavailable from 16:00 to 18:00 because of Vacation. ' +
       'U11 Juniors overlaps this period by 60 minutes.',
     );
   });
 
   it('ignores same-kind overlaps and other staff', () => {
-    const holiday = ev({ id: 'h1', staffId: 'a', kind: 'holiday', start: '2026-10-05T16:00:00Z', end: '2026-10-05T18:00:00Z' });
+    const holiday = ev({ id: 'h1', staffId: 'a', kind: 'vacation', start: '2026-10-05T16:00:00Z', end: '2026-10-05T18:00:00Z' });
     const otherStaffSession = ev({ id: 's2', staffId: 'b', kind: 'session', start: '2026-10-05T16:30:00Z', end: '2026-10-05T17:30:00Z' });
     const available = ev({ id: 'a1', staffId: 'a', kind: 'available', start: '2026-10-05T16:00:00Z', end: '2026-10-05T18:00:00Z' });
     expect(detectConflicts([holiday, otherStaffSession, available])).toHaveLength(0);
@@ -191,7 +191,7 @@ describe('chargeable-time validation (§11)', () => {
 
 describe('kind metadata', () => {
   it('marks blocking unavailability kinds and system events', () => {
-    for (const kind of ['holiday', 'sick_leave', 'personal_appointment', 'out_of_office', 'unavailable_other', 'duty_outside_club'] as const) {
+    for (const kind of ['vacation', 'sick_leave', 'personal_appointment', 'out_of_office', 'unavailable_other', 'duty_outside_club'] as const) {
       expect(DIARY_KINDS[kind].blocking).toBe(true);
     }
     expect(DIARY_KINDS.available.bucket).toBe('available');

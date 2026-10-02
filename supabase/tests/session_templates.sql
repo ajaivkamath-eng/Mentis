@@ -82,6 +82,30 @@ $$;
 grant select, insert, update on tpl_results to authenticated;
 grant execute on function mentis_tmpl_uuid(text) to authenticated;
 
+select mentis_tmpl_ok('session table names preserve the blueprint-series-occurrence hierarchy',
+  (select relkind = 'r' from pg_class where oid = 'public.mentis_sessions'::regclass)
+  and (select relkind = 'r' from pg_class where oid = 'public.mentis_session_templates'::regclass)
+  and (select relkind = 'r' from pg_class where oid = 'public.mentis_session_series'::regclass)
+  and (select relkind = 'v' from pg_class where oid = 'public.mentis_session_occurrences'::regclass)
+  and exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.mentis_sessions'::regclass
+      and confrelid = 'public.mentis_session_templates'::regclass
+      and contype = 'f'
+      and conkey = array[(select attnum from pg_attribute
+                          where attrelid = 'public.mentis_sessions'::regclass
+                            and attname = 'template_id')]
+  )
+  and exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.mentis_sessions'::regclass
+      and confrelid = 'public.mentis_session_series'::regclass
+      and contype = 'f'
+      and conkey = array[(select attnum from pg_attribute
+                          where attrelid = 'public.mentis_sessions'::regclass
+                            and attname = 'series_id')]
+  ));
+
 -- ---------------------------------------------------------------------------
 -- 1. the generator's date maths, pinned to fixed dates
 -- ---------------------------------------------------------------------------
@@ -138,8 +162,8 @@ select mentis_tmpl_ok('18:00 London is 18:00Z in winter and 17:00Z in summer',
 do $$
 declare
   v_org   uuid := '00000000-0000-0000-0000-000000000001';
-  v_venue uuid := (select id from mentis_venues where organization_id = v_org and name = 'Kingfisher Hall A');
-  v_hallb uuid := (select id from mentis_venues where organization_id = v_org and name = 'Kingfisher Hall B');
+  v_venue uuid := (select id from mentis_venues where organization_id = v_org and name = 'Kingfisher Table Tennis Club');
+  v_hallb uuid := (select id from mentis_venues where organization_id = v_org and name = 'Reading School');
   v_coach uuid := (select id from mentis_staff where display_name = 'BP Coach');
   v_tpl   uuid;
   v_empty uuid;
@@ -263,7 +287,7 @@ select mentis_tmpl_ok('the series exists and is active',
   (select value->>'series_id' is not null from tpl_results where key = 'seed')
   and exists (select 1 from mentis_session_series where id = mentis_tmpl_uuid('series') and status = 'active'));
 select mentis_tmpl_ok('every instance points at both the blueprint and the series',
-  (select count(*) = 3 from mentis_sessions
+  (select count(*) = 3 from mentis_session_occurrences
     where series_id = mentis_tmpl_uuid('series')
       and template_id = mentis_tmpl_uuid('template')
       and occurrence_date is not null
@@ -273,11 +297,11 @@ select mentis_tmpl_ok('every instance points at both the blueprint and the serie
 select mentis_tmpl_ok('instances land on the blueprint slot in local time',
   (select bool_and((start_at at time zone 'Europe/London')::time = '18:00'
                    and (end_at at time zone 'Europe/London')::time = '19:30')
-     from mentis_sessions where series_id = mentis_tmpl_uuid('series')));
+     from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series')));
 select mentis_tmpl_ok('the staffing plan becomes real staffing, with the lead-in',
   (select count(*) = 3
      from mentis_session_staffing ss
-     join mentis_sessions s on s.id = ss.session_id
+     join mentis_session_occurrences s on s.id = ss.session_id
     where s.series_id = mentis_tmpl_uuid('series')
       and ss.capacity = 'lead'
       and ss.staff_id = mentis_tmpl_uuid('coach')
@@ -285,8 +309,15 @@ select mentis_tmpl_ok('the staffing plan becomes real staffing, with the lead-in
       and ss.planned_start = s.start_at - interval '15 minutes'));
 select mentis_tmpl_ok('the default roster is enrolled on every instance',
   (select count(*) = 6 from mentis_enrollments e
-     join mentis_sessions s on s.id = e.session_id
+     join mentis_session_occurrences s on s.id = e.session_id
     where s.series_id = mentis_tmpl_uuid('series')));
+select mentis_tmpl_ok('the effective roster resolves member visibility by validity window',
+  (select count(*) >= 1
+     from session_series_effective_roster(
+       mentis_tmpl_uuid('series'),
+       (select min(start_at)::date from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series')),
+       (select max(start_at)::date from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series'))
+     )));
 select mentis_tmpl_ok('the series view reports the run and its pattern',
   (select instance_count = 3 and exception_count = 0 and frequency = 'weekly' and by_weekday = array[1]::smallint[]
      from session_series_overview where id = mentis_tmpl_uuid('series')));
@@ -308,7 +339,7 @@ end $$;
 select mentis_tmpl_ok('extending an already-materialised series creates nothing',
   (select (value->>'generated')::int = 0 and (value->>'existing')::int = 3 from tpl_results where key = 'again'));
 select mentis_tmpl_ok('the instance count is unchanged',
-  (select count(*) = 3 from mentis_sessions where series_id = mentis_tmpl_uuid('series')));
+  (select count(*) = 3 from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series')));
 
 -- ---------------------------------------------------------------------------
 -- 7. one-off session from the blueprint — an instance with no series
@@ -333,7 +364,7 @@ end $$;
 
 select mentis_tmpl_ok('a one-off is a single instance of the blueprint',
   (select (value->>'series_id') is null from tpl_results where key = 'oneoff')
-  and (select count(*) = 1 from mentis_sessions
+  and (select count(*) = 1 from mentis_session_occurrences
         where id = (select (value->>'session_id')::uuid from tpl_results where key = 'oneoff')
           and template_id = mentis_tmpl_uuid('template')
           and series_id is null
@@ -341,7 +372,7 @@ select mentis_tmpl_ok('a one-off is a single instance of the blueprint',
 select mentis_tmpl_ok('the one-off picks up the blueprint slot and its staffing',
   (select (s.start_at at time zone 'Europe/London')::time = '18:00'
        and exists (select 1 from mentis_session_staffing ss where ss.session_id = s.id)
-     from mentis_sessions s where s.id = (select (value->>'session_id')::uuid from tpl_results where key = 'oneoff')));
+     from mentis_session_occurrences s where s.id = (select (value->>'session_id')::uuid from tpl_results where key = 'oneoff')));
 select mentis_tmpl_ok('asking twice returns the same instance',
   (select (value->>'existing')::boolean from tpl_results where key = 'oneoff_again')
   and (select (value->>'session_id') from tpl_results where key = 'oneoff')
@@ -360,7 +391,7 @@ begin
 
   -- book the venue at the blueprint slot on the fifth Monday, so the generator
   -- has to work around it
-  insert into mentis_sessions (organization_id, venue_id, name, start_at, end_at)
+  insert into mentis_session_occurrences (organization_id, venue_id, name, start_at, end_at)
   values (
     '00000000-0000-0000-0000-000000000001',
     mentis_tmpl_uuid('venue'),
@@ -386,7 +417,7 @@ select mentis_tmpl_ok('the rest of the run is materialised around the breaks',
       and jsonb_array_length(value->'conflicts') = 1
      from tpl_results where key = 'extended'));
 select mentis_tmpl_ok('the holiday Mondays have no instances',
-  (select count(*) = 0 from mentis_sessions
+  (select count(*) = 0 from mentis_session_occurrences
     where series_id = mentis_tmpl_uuid('series')
       and occurrence_date in (
         (select (value #>> '{}')::date + 21 from tpl_results where key = 'start'),
@@ -394,9 +425,9 @@ select mentis_tmpl_ok('the holiday Mondays have no instances',
 select mentis_tmpl_ok('the blocked Monday is reported, not silently dropped',
   (select (value->'conflicts'->0->>'message') like '%concurrency%' from tpl_results where key = 'extended'));
 select mentis_tmpl_ok('the series now holds every instance it could create',
-  (select count(*) = 8 from mentis_sessions where series_id = mentis_tmpl_uuid('series')));
+  (select count(*) = 8 from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series')));
 select mentis_tmpl_ok('no instance is duplicated per occurrence',
-  (select count(*) = count(distinct occurrence_date) from mentis_sessions where series_id = mentis_tmpl_uuid('series')));
+  (select count(*) = count(distinct occurrence_date) from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series')));
 
 -- ---------------------------------------------------------------------------
 -- 9. drift: an edited instance records what it overrode; re-applying the
@@ -409,10 +440,10 @@ declare
 begin
   perform mentis_tmpl_set_uid('a1000000-0000-0000-0000-000000000001');
 
-  select id into v_session from mentis_sessions
+  select id into v_session from mentis_session_occurrences
    where series_id = mentis_tmpl_uuid('series') order by start_at limit 1;
 
-  update mentis_sessions
+  update mentis_session_occurrences
      set name = 'U13 Development (moved)',
          start_at = start_at - interval '30 minutes',
          end_at = end_at - interval '30 minutes'
@@ -424,7 +455,7 @@ end $$;
 select mentis_tmpl_ok('the edited instance is flagged with the fields that drifted',
   (select overridden_fields @> array['name', 'start_at', 'end_at']
       and is_exception
-     from mentis_sessions where id = mentis_tmpl_uuid('drifted_session')));
+     from mentis_session_occurrences where id = mentis_tmpl_uuid('drifted_session')));
 select mentis_tmpl_ok('the blueprint view counts the drifted instance',
   (select drifted_instances = 1 from session_template_overview where id = mentis_tmpl_uuid('template')));
 select mentis_tmpl_ok('the series view counts it too',
@@ -440,10 +471,10 @@ end $$;
 
 select mentis_tmpl_ok('re-applying restores the blueprint values',
   (select not is_exception and overridden_fields = '{}' and name = 'BP U13 Development'
-     from mentis_sessions where id = mentis_tmpl_uuid('drifted_session')));
+     from mentis_session_occurrences where id = mentis_tmpl_uuid('drifted_session')));
 select mentis_tmpl_ok('the restored instance sits back on the blueprint slot',
   (select (start_at at time zone 'Europe/London')::time = '18:00' and (end_at at time zone 'Europe/London')::time = '19:30'
-     from mentis_sessions where id = mentis_tmpl_uuid('drifted_session')));
+     from mentis_session_occurrences where id = mentis_tmpl_uuid('drifted_session')));
 select mentis_tmpl_ok('the call reports what it re-applied',
   (select (value->'applied') @> '["name","start_at","end_at"]'::jsonb and value->'remaining_overrides' = '[]'::jsonb
      from tpl_results where key = 'reapplied'));
@@ -464,7 +495,7 @@ end $$;
 select mentis_tmpl_ok('a paused series stops being "active" without losing its instances',
   (select value->>'status' = 'paused' from tpl_results where key = 'paused')
   and (select status = 'paused' from mentis_session_series where id = mentis_tmpl_uuid('series'))
-  and (select count(*) > 0 from mentis_sessions where series_id = mentis_tmpl_uuid('series')));
+  and (select count(*) > 0 from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series')));
 
 do $$
 declare v_result jsonb;
@@ -484,7 +515,7 @@ declare
   v_before integer;
 begin
   perform mentis_tmpl_set_uid('a1000000-0000-0000-0000-000000000001');
-  select count(*) into v_before from mentis_sessions
+  select count(*) into v_before from mentis_session_occurrences
    where series_id = mentis_tmpl_uuid('series') and start_at > now() and status <> 'cancelled';
 
   v_result := set_session_series_status(mentis_tmpl_uuid('series'), 'ended', true, 'term finished');
@@ -495,11 +526,11 @@ select mentis_tmpl_ok('ending a series cancels every future instance of the run'
   (select status = 'ended' from mentis_session_series where id = mentis_tmpl_uuid('series'))
   and (select (value->>'cancelled_instances')::int = (select (value #>> '{}')::int from tpl_results where key = 'cancellable')
          from tpl_results where key = 'ended')
-  and (select count(*) = 0 from mentis_sessions
+  and (select count(*) = 0 from mentis_session_occurrences
         where series_id = mentis_tmpl_uuid('series') and start_at > now() and status <> 'cancelled'));
 select mentis_tmpl_ok('cancelled instances are kept, with the reason recorded',
   (select count(*) > 0 and bool_and(cancel_reason = 'term finished')
-     from mentis_sessions where series_id = mentis_tmpl_uuid('series') and status = 'cancelled'));
+     from mentis_session_occurrences where series_id = mentis_tmpl_uuid('series') and status = 'cancelled'));
 select mentis_tmpl_ok('the ended series still reports its whole run',
   (select instance_count > 0 and cancelled_instances > 0
      from session_series_overview where id = mentis_tmpl_uuid('series')));
@@ -547,7 +578,7 @@ begin
    where w.id = v_schedule;
 
   -- written the old way: no template, only the weekly schedule it came from
-  insert into mentis_sessions (organization_id, venue_id, name, start_at, end_at, schedule_id)
+  insert into mentis_session_occurrences (organization_id, venue_id, name, start_at, end_at, schedule_id)
   values (
     '00000000-0000-0000-0000-000000000001', mentis_tmpl_uuid('hallb'), 'BP Legacy Instance',
     ((select (value #>> '{}')::date + 28 from tpl_results where key = 'start')::timestamp + interval '19 hours') at time zone 'Europe/London',
@@ -579,7 +610,87 @@ select mentis_tmpl_ok('a session written the old way is linked to the blueprint 
       and series_id = mentis_tmpl_uuid('legacy_series')
       and occurrence_date = (select (value #>> '{}')::date + 28 from tpl_results where key = 'start')
       and blueprint is not null
-     from mentis_sessions where id = mentis_tmpl_uuid('legacy_session')));
+     from mentis_session_occurrences where id = mentis_tmpl_uuid('legacy_session')));
+
+-- ---------------------------------------------------------------------------
+-- 11b. operating model: one template -> one season -> a full year of classes
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_tpl   uuid;
+  v_first jsonb;
+  v_again jsonb;
+  v_rule  jsonb;
+begin
+  perform mentis_tmpl_set_uid('a1000000-0000-0000-0000-000000000001');
+
+  insert into mentis_session_templates (organization_id, name, venue_id, default_start_time, default_end_time)
+  values ('00000000-0000-0000-0000-000000000001', 'BP Season Thursday', mentis_tmpl_uuid('hallb'), '16:00', '17:30')
+  returning id into v_tpl;
+  insert into mentis_session_template_members (template_id, member_id)
+  values (v_tpl, 'd1000000-0000-0000-0000-000000000001');
+
+  -- The UI default 90-day horizon must not truncate a bounded season.
+  v_rule := jsonb_build_object(
+    'frequency', 'weekly', 'by_weekday', jsonb_build_array(4),
+    'start_time', '16:00', 'end_time', '17:30',
+    'valid_from', current_date - 21, 'valid_to', current_date + 300, 'horizon_days', 90);
+  v_first := instantiate_session_series(v_tpl, v_rule, '{"assign_staff": false}'::jsonb);
+  v_again := instantiate_session_series(v_tpl, v_rule, '{"assign_staff": false}'::jsonb);
+
+  insert into tpl_results values ('season_tpl', to_jsonb(v_tpl)), ('season_first', v_first), ('season_again', v_again);
+end $$;
+
+select mentis_tmpl_ok('a bounded season generates past the 90-day horizon',
+  (select count(*) > 40 from mentis_session_occurrences where template_id = mentis_tmpl_uuid('season_tpl')));
+select mentis_tmpl_ok('re-publishing a season reuses it and generates nothing new',
+  (select (a.value->>'series_id') = (f.value->>'series_id') and (a.value->>'generated')::int = 0
+     from tpl_results a, tpl_results f where a.key = 'season_again' and f.key = 'season_first'));
+select mentis_tmpl_ok('one template has exactly one season per start date',
+  (select count(*) = 1 from mentis_session_series where template_id = mentis_tmpl_uuid('season_tpl')));
+select mentis_tmpl_ok('classes already in the past still get the default roster',
+  (select count(*) >= 1 from mentis_enrollments e join mentis_session_occurrences s on s.id = e.session_id
+    where s.template_id = mentis_tmpl_uuid('season_tpl') and s.start_at < now()));
+
+select mentis_tmpl_ok('roster sync reconciles many rows without error',
+  (select (sync_template_roster_to_child_sessions(mentis_tmpl_uuid('season_tpl')) ? 'inserted')));
+
+do $$
+declare v_session uuid;
+begin
+  select id into v_session from mentis_session_occurrences
+   where template_id = mentis_tmpl_uuid('season_tpl') order by start_at desc limit 1;
+  insert into mentis_enrollments (session_id, member_id)
+  values (v_session, 'd1000000-0000-0000-0000-000000000002');
+  delete from mentis_session_template_members
+   where template_id = mentis_tmpl_uuid('season_tpl') and member_id = 'd1000000-0000-0000-0000-000000000001';
+  perform sync_template_roster_to_child_sessions(mentis_tmpl_uuid('season_tpl'));
+  insert into tpl_results values ('season_manual_session', to_jsonb(v_session));
+end $$;
+
+select mentis_tmpl_ok('removing a member from the template removes their template enrollments',
+  (select count(*) = 0 from mentis_enrollments e join mentis_session_occurrences s on s.id = e.session_id
+    where s.template_id = mentis_tmpl_uuid('season_tpl') and e.member_id = 'd1000000-0000-0000-0000-000000000001'));
+select mentis_tmpl_ok('a member added to one class by hand survives the roster sync',
+  exists (select 1 from mentis_enrollments
+           where session_id = mentis_tmpl_uuid('season_manual_session')
+             and member_id = 'd1000000-0000-0000-0000-000000000002' and source = 'manual'));
+
+do $$
+declare v_ver integer;
+begin
+  perform mentis_tmpl_set_uid('a1000000-0000-0000-0000-000000000001');
+  update mentis_session_templates set capacity = 30 where id = mentis_tmpl_uuid('season_tpl');
+  v_ver := restore_session_template_version(mentis_tmpl_uuid('season_tpl'), 1);
+  insert into tpl_results values ('season_restored', to_jsonb(v_ver));
+end $$;
+
+select mentis_tmpl_ok('every template version is kept in the history',
+  (select count(*) = 3 from mentis_session_template_versions where template_id = mentis_tmpl_uuid('season_tpl')));
+select mentis_tmpl_ok('restoring version 1 makes its values current as a new version',
+  (select t.version = 3 and t.capacity is null and (r.value #>> '{}')::int = 3
+     from mentis_session_templates t, tpl_results r
+    where t.id = mentis_tmpl_uuid('season_tpl') and r.key = 'season_restored'));
 
 -- ---------------------------------------------------------------------------
 -- 12. RLS: coaches read the blueprint library, only admins author it
@@ -601,7 +712,7 @@ begin
   perform mentis_tmpl_must_fail('a coach cannot author a blueprint',
     $$ insert into mentis_session_templates (organization_id, name, venue_id, default_start_time, default_end_time)
        values ('00000000-0000-0000-0000-000000000001', 'BP Coach Blueprint',
-               (select id from mentis_venues where name = 'Kingfisher Hall B'), '09:00', '10:00') $$);
+               (select id from mentis_venues where name = 'Reading School'), '09:00', '10:00') $$);
   perform mentis_tmpl_must_fail('a coach cannot publish a series',
     format('select instantiate_session_series(%L::uuid, %L::jsonb)',
       mentis_tmpl_uuid('template'), '{"frequency":"weekly","by_weekday":[1],"start_time":"18:00","end_time":"19:30","valid_from":"2027-01-04","horizon_days":30}'));

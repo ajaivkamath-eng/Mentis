@@ -31,14 +31,14 @@ export type DiarySourceType = 'manual' | 'planner' | 'session' | 'task' | 'admin
 
 export type AvailabilityKind =
   | 'available' | 'working_hours' | 'on_duty' | 'club_duty'
-  | 'holiday' | 'sick_leave' | 'duty_outside_club' | 'working_elsewhere'
+  | 'vacation' | 'sick_leave' | 'duty_outside_club' | 'working_elsewhere'
   | 'personal_appointment' | 'training' | 'out_of_office' | 'unavailable_other' | 'other';
 
 /** High-level bucket driving colour + behaviour (editability, overrides). */
 export type DiaryBucket =
   | 'available'      // coach is open for coaching
   | 'regular'        // system-generated default availability
-  | 'unavailable'    // holiday, sick, appointment, OOO…
+  | 'unavailable'    // vacation, sick, appointment, OOO…
   | 'duty'           // club duty / external duty / working elsewhere
   | 'session'        // booked session (system, not editable here)
   | 'task';          // booked task (system, not editable here)
@@ -55,7 +55,7 @@ export const DIARY_KINDS: Record<AvailabilityKind | 'session' | 'task', DiaryKin
   working_hours: { label: 'Regular working hours', bucket: 'regular', blocking: false },
   on_duty: { label: 'Club duty', bucket: 'duty', blocking: false },
   club_duty: { label: 'Club duty', bucket: 'duty', blocking: false },
-  holiday: { label: 'Holiday / annual leave', bucket: 'unavailable', blocking: true },
+  vacation: { label: 'Vacation', bucket: 'unavailable', blocking: true },
   sick_leave: { label: 'Sick leave', bucket: 'unavailable', blocking: true },
   duty_outside_club: { label: 'Duty outside club', bucket: 'duty', blocking: true },
   working_elsewhere: { label: 'Working elsewhere', bucket: 'duty', blocking: true },
@@ -243,7 +243,7 @@ export function overlapMinutes(aStart: string, aEnd: string, bStart: string, bEn
 }
 
 const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
 
 /** The exact wording required by the availability conflict spec. */
 export function conflictMessage(

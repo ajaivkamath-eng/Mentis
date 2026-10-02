@@ -2,8 +2,9 @@
 
 ## Deploy order (staging → prod)
 
-1. `npx supabase db push` (applies `0001`–`0010`; seeds Kingfisher org, venues,
-   Table Tennis profile, action types, UK holidays, org policies).
+1. `npx supabase db push` (applies `0001`–`0013`; seeds Kingfisher org, venues,
+   Table Tennis profile, action types, UK holidays, org policies, staffing/diary
+   tables and session templates — see `supabase/migrations/README.md`).
 2. Seed staff links: `supabase/seed_staff.sql` (map Rally `auth.users` ids →
    `mentis_staff` rows with roles).
 3. `npx supabase functions deploy` for all functions in `supabase/functions`.

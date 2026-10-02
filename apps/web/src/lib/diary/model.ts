@@ -37,7 +37,7 @@ const soft = (hex: string, alpha = '14') => `color-mix(in srgb, ${hex} ${parseIn
 export const KIND: Record<EventKind, KindStyle> = {
   available: { label: 'Available for coaching', color: 'var(--brand)', soft: 'var(--brand-soft)', icon: Sparkles, bucket: 'available', blocking: false },
   working_hours: { label: 'Regular working hours', color: 'var(--info)', soft: 'var(--info-soft)', icon: Timer, bucket: 'regular', blocking: false },
-  holiday: { label: 'Holiday / annual leave', color: 'var(--warning)', soft: 'var(--warning-soft)', icon: Palmtree, bucket: 'unavailable', blocking: true, striped: true },
+  vacation: { label: 'Vacation', color: 'var(--warning)', soft: 'var(--warning-soft)', icon: Palmtree, bucket: 'unavailable', blocking: true, striped: true },
   sick_leave: { label: 'Sick leave', color: 'var(--danger)', soft: 'var(--danger-soft)', icon: HeartPulse, bucket: 'unavailable', blocking: true, striped: true },
   unavailable_other: { label: 'Unavailable', color: '#ef4444', soft: soft('#ef4444'), icon: CalendarOff, bucket: 'unavailable', blocking: true, striped: true },
   personal_appointment: { label: 'Personal appointment', color: 'var(--accent)', soft: 'var(--accent-soft)', icon: Stethoscope, bucket: 'unavailable', blocking: true, striped: true },

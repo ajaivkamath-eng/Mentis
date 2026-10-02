@@ -1559,7 +1559,7 @@ session_rows AS (
    AND v.organization_id = (SELECT id FROM org)
   CROSS JOIN org
 )
-INSERT INTO public.mentis_sessions (id, organization_id, venue_id, name, start_at, end_at)
+INSERT INTO public.mentis_session_occurrences (id, organization_id, venue_id, name, start_at, end_at)
 SELECT
   gen_random_uuid(),
   sr.organization_id,
@@ -1570,7 +1570,7 @@ SELECT
 FROM session_rows sr
 WHERE NOT EXISTS (
   SELECT 1
-  FROM public.mentis_sessions s
+  FROM public.mentis_session_occurrences s
   WHERE s.organization_id = sr.organization_id
     AND s.venue_id = sr.venue_id
     AND s.name = sr.session_name
@@ -2328,7 +2328,7 @@ SELECT
   'active',
   true
 FROM links l
-JOIN public.mentis_sessions mss
+JOIN public.mentis_session_occurrences mss
   ON mss.organization_id = l.organization_id
  AND mss.venue_id = l.venue_id
  AND mss.name = l.session_name

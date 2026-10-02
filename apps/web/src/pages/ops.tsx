@@ -25,7 +25,6 @@ import {
   CheckCheck,
   UserPlus,
   Pencil,
-  Layers,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
@@ -36,7 +35,6 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter, ReviewAndConfirmBanner, ConfirmDialog } from '../components/ui/dialog';
 import { demoEnabled } from '../lib/demo';
 import { cn } from '../lib/cn';
-import { explainNoGeneratedDates, explainSessionInsertError } from '../lib/sessionErrors';
 
 // ---------------------------------------------------------------------------
 // Types for the workbook
@@ -44,6 +42,7 @@ import { explainNoGeneratedDates, explainSessionInsertError } from '../lib/sessi
 type Venue = { id: string; name: string; concurrent_session_limit?: number };
 type SessionInstance = {
   id: string;
+  template_id?: string | null;
   name: string;
   venue_id: string;
   venue_name?: string;
@@ -63,6 +62,11 @@ type Member = { id: string; name: string; alert?: boolean; customer?: string };
 type Enrollment = { session_id: string; member_id: string; member?: Member };
 type Attendance = { session_id: string; member_id: string; status: 'present' | 'absent' | 'late' | 'taster' };
 
+const isCoachStaff = (staff: any) => {
+  const roles = Array.isArray(staff?.roles) ? staff.roles : typeof staff?.roles === 'string' ? staff.roles.split(',') : [];
+  return roles.some((role: string) => role?.toUpperCase?.() === 'COACH');
+};
+
 type SessionGroup = {
   key: string; // schedule_id or name|venue
   name: string;
@@ -74,6 +78,110 @@ type SessionGroup = {
   sessions: SessionInstance[]; // sorted by date
   memberIds: string[]; // unique
 };
+
+function toDateKey(value?: string | null) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function withinDateWindow(dateKey: string | null, validFrom?: string | null, validTo?: string | null) {
+  if (!dateKey) return true;
+  if (validFrom && dateKey < validFrom) return false;
+  if (validTo && dateKey > validTo) return false;
+  return true;
+}
+
+export function getPreferredGroupKey(groups: Array<Pick<SessionGroup, 'key' | 'sessions'>>, now = new Date()) {
+  const candidates = groups.filter(g => (g.sessions ?? []).some(s => new Date(s.start_at).getTime() >= now.getTime()));
+  if (!candidates.length) return groups[0]?.key ?? '';
+
+  const ranked = candidates
+    .map(g => {
+      const nextSession = [...(g.sessions ?? [])].sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)).find(s => Date.parse(s.start_at) >= now.getTime());
+      return { key: g.key, nextAt: nextSession ? Date.parse(nextSession.start_at) : Number.MAX_SAFE_INTEGER };
+    })
+    .sort((a, b) => a.nextAt - b.nextAt);
+
+  return ranked[0]?.key ?? '';
+}
+
+export function getPreferredSessionIndex(group: Pick<SessionGroup, 'sessions'>, now = new Date()) {
+  const sessions = group.sessions ?? [];
+  const nextIndex = sessions.findIndex(s => Date.parse(s.start_at) >= now.getTime());
+  return nextIndex >= 0 ? nextIndex : Math.max(0, sessions.length - 1);
+}
+
+export function resolveSelectedGroupsForPreview({
+  groups,
+  selectedGroupKeys,
+  selectedGroupKey,
+  filteredGroups,
+  selectedGroup,
+  selectedVenue,
+}: {
+  groups: Array<Pick<SessionGroup, 'key' | 'sessions'>>;
+  selectedGroupKeys: string[];
+  selectedGroupKey: string;
+  filteredGroups: Array<Pick<SessionGroup, 'key' | 'sessions'>>;
+  selectedGroup: Pick<SessionGroup, 'key' | 'sessions'> | null;
+  selectedVenue?: string;
+}) {
+  if (selectedGroupKey && selectedGroup) return [selectedGroup];
+  if (selectedGroupKey) {
+    const preferred = groups.find(g => g.key === selectedGroupKey) ?? filteredGroups.find(g => g.key === selectedGroupKey);
+    if (preferred) return [preferred];
+  }
+  if (selectedGroupKeys.length) {
+    const selected = groups.filter(g => selectedGroupKeys.includes(g.key));
+    if (selected.length) {
+      if (selectedVenue && selectedVenue !== 'all') {
+        const scoped = selected.filter(g => filteredGroups.some(fg => fg.key === g.key));
+        if (scoped.length) return scoped;
+      }
+      return selected;
+    }
+  }
+  if (selectedVenue && selectedVenue !== 'all') return filteredGroups;
+  return filteredGroups;
+}
+
+export function resolveGroupMemberIds(
+  group: Pick<SessionGroup, 'sessions'>,
+  templateMembers: Array<{ template_id?: string | null; member_id?: string | null; valid_from?: string | null; valid_to?: string | null }>,
+  sessionEnrollments: Array<{ session_id?: string | null; member_id?: string | null; valid_from?: string | null; valid_to?: string | null }>,
+) {
+  const sessionIds = new Set((group.sessions ?? []).map(s => s.id));
+  const templateIds = new Set((group.sessions ?? []).filter(s => 'template_id' in s && !!(s as any).template_id).map(s => (s as any).template_id));
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+
+  const addMember = (memberId?: string | null) => {
+    if (!memberId || seen.has(memberId)) return;
+    seen.add(memberId);
+    ordered.push(memberId);
+  };
+
+  for (const row of templateMembers) {
+    if (!templateIds.has(row.template_id ?? null)) continue;
+    const sessionDates = (group.sessions ?? []).map(s => toDateKey(s.start_at)).filter(Boolean) as string[];
+    if (!sessionDates.length) continue;
+
+    const activeOnAnySession = sessionDates.some(dateKey => withinDateWindow(dateKey, row.valid_from ?? null, row.valid_to ?? null));
+    if (activeOnAnySession) addMember(row.member_id ?? null);
+  }
+
+  for (const row of sessionEnrollments) {
+    if (!row.session_id || !sessionIds.has(row.session_id)) continue;
+    const session = (group.sessions ?? []).find(s => s.id === row.session_id);
+    const dateKey = toDateKey(session?.start_at ?? null);
+    if (!dateKey) continue;
+    if (withinDateWindow(dateKey, row.valid_from ?? null, row.valid_to ?? null)) addMember(row.member_id ?? null);
+  }
+
+  return ordered;
+}
 
 // ---------------------------------------------------------------------------
 // Mock data generator for demo mode (no supabase)
@@ -209,42 +317,6 @@ function getIsoWeekKey(dateStr: string) {
   return monday.toISOString().slice(0, 10);
 }
 
-export function resolveSelectedGroupsForPreview({
-  groups,
-  selectedGroupKeys,
-  selectedGroupKey,
-  selectedVenue,
-  filteredGroups,
-  selectedGroup,
-  bulkSelectionMode = false,
-}: {
-  groups: SessionGroup[];
-  selectedGroupKeys: string[];
-  selectedGroupKey: string;
-  selectedVenue: string;
-  filteredGroups: SessionGroup[];
-  selectedGroup: SessionGroup | null;
-  bulkSelectionMode?: boolean;
-}) {
-  if (bulkSelectionMode && selectedGroupKeys.length) {
-    return groups.filter(g => selectedGroupKeys.includes(g.key));
-  }
-
-  if (selectedGroupKey && selectedGroup) {
-    return [selectedGroup];
-  }
-
-  if (selectedGroupKeys.length && !selectedGroupKey) {
-    return groups.filter(g => selectedGroupKeys.includes(g.key));
-  }
-
-  if (selectedVenue !== 'all') {
-    return filteredGroups.length ? filteredGroups : (selectedGroup ? [selectedGroup] : []);
-  }
-
-  return filteredGroups;
-}
-
 function formatDateShort(iso: string) {
   const d = new Date(iso);
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
@@ -339,15 +411,9 @@ export function Sessions() {
     return groups.find(g => g.key === selectedGroupKey) ?? filteredGroups[0] ?? null;
   }, [groups, selectedGroupKey, filteredGroups]);
 
-  const selectedBulkGroups = useMemo(() => resolveSelectedGroupsForPreview({
-    groups,
-    selectedGroupKeys,
-    selectedGroupKey,
-    selectedVenue,
-    filteredGroups,
-    selectedGroup,
-    bulkSelectionMode,
-  }), [groups, selectedGroupKeys, selectedGroupKey, selectedVenue, filteredGroups, selectedGroup, bulkSelectionMode]);
+  const selectedBulkGroups = useMemo(() => {
+    return groups.filter(g => selectedGroupKeys.includes(g.key));
+  }, [groups, selectedGroupKeys]);
 
   const toggleBulkGroupSelection = (key: string) => {
     setSelectedGroupKeys(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
@@ -567,7 +633,7 @@ export function Sessions() {
   };
 
   const previewBulkRecurringPattern = () => {
-    const baseGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedVenue === 'all' ? filteredGroups : (selectedGroup ? [selectedGroup] : []));
+    const baseGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedGroup ? [selectedGroup] : []);
     if (!baseGroups.length) {
       setRecurrencePreview([]);
       setRecurrenceBuckets({ generated: [], skippedTerm: [], skippedBank: [] });
@@ -579,11 +645,6 @@ export function Sessions() {
     const skippedBank = new Set<string>();
     const skippedTerm = new Set<string>();
     const venueMap = new Map<string, { generated: number; skippedTerm: number; skippedBank: number }>();
-
-    baseGroups.forEach(group => {
-      const venueName = group.venue_name || 'Venue';
-      venueMap.set(venueName, venueMap.get(venueName) ?? { generated: 0, skippedTerm: 0, skippedBank: 0 });
-    });
 
     baseGroups.forEach(group => {
       const anchor = group.sessions[0];
@@ -840,11 +901,7 @@ export function Sessions() {
     const previewDates = recurrencePreview.length ? recurrencePreview : previewRecurrenceDates();
     const summary = recurrenceSummary ?? getRecurrencePreviewData().summary;
     if (!previewDates.length || !summary) {
-      alert(explainNoGeneratedDates({
-        skipBankHolidays: recurrenceForm.skip_bank_holidays,
-        skipTermHolidays: recurrenceForm.skip_term_holidays,
-        range: `${recurrenceForm.start_date || 'selected dates'} to ${recurrenceForm.end_date || 'selected dates'}`,
-      }));
+      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
       return;
     }
     setShowRecurringConfirm(true);
@@ -859,11 +916,7 @@ export function Sessions() {
 
     const previewDates = recurrencePreview.length ? recurrencePreview : previewBulkRecurringPattern();
     if (!previewDates.length) {
-      alert(explainNoGeneratedDates({
-        skipBankHolidays: recurrenceForm.skip_bank_holidays,
-        skipTermHolidays: recurrenceForm.skip_term_holidays,
-        range: `${recurrenceForm.start_date || 'selected dates'} to ${recurrenceForm.end_date || 'selected dates'}`,
-      }));
+      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
       return;
     }
 
@@ -919,64 +972,12 @@ export function Sessions() {
     clearBulkSelection();
   };
 
-  const resetSelectedOccurrences = async () => {
-    const targetGroups = selectedBulkGroups.length ? selectedBulkGroups : (selectedGroup ? [selectedGroup] : []);
-    if (!targetGroups.length) {
-      alert('Select at least one session group to reset its occurrences.');
-      return;
-    }
-
-    const targetSessionIds = targetGroups.flatMap(group => group.sessions.map(session => session.id));
-    if (!targetSessionIds.length) {
-      alert('No session occurrences were found in the current selection.');
-      return;
-    }
-
-    const confirmText = `Reset ${targetSessionIds.length} occurrences across ${targetGroups.length} selected groups back to their recurring pattern?`;
-    if (!window.confirm(confirmText)) return;
-
-    if (!demoEnabled && staff) {
-      const { error } = await supabase.from('mentis_schedule_overrides').delete().in('session_id', targetSessionIds);
-      if (error) {
-        alert(explainSessionInsertError(error));
-        return;
-      }
-    }
-
-    setGroups(prev => prev.map(group => {
-      const isSelected = targetGroups.some(target => target.key === group.key);
-      if (!isSelected) return group;
-
-      return {
-        ...group,
-        sessions: group.sessions.map(session => {
-          const base = group.sessions.find(candidate => candidate.schedule_id === session.schedule_id && candidate.id !== session.id) ?? group.sessions[0];
-          if (!base) return session;
-          return {
-            ...session,
-            name: base.name,
-            venue_id: base.venue_id,
-            start_at: base.start_at,
-            end_at: base.end_at,
-            status: base.status,
-          };
-        }),
-      };
-    }));
-
-    clearRecurrencePreview();
-  };
-
   const confirmRecurringSeries = async () => {
     if (!selectedGroup || !editingSession) return;
     const previewDates = recurrencePreview.length ? recurrencePreview : previewRecurrenceDates();
     const summary = recurrenceSummary ?? getRecurrencePreviewData().summary;
     if (!previewDates.length || !summary) {
-      alert(explainNoGeneratedDates({
-        skipBankHolidays: recurrenceForm.skip_bank_holidays,
-        skipTermHolidays: recurrenceForm.skip_term_holidays,
-        range: `${recurrenceForm.start_date || 'selected dates'} to ${recurrenceForm.end_date || 'selected dates'}`,
-      }));
+      alert('No generated dates match the selected recurrence range after holiday filters are applied.');
       return;
     }
 
@@ -1056,14 +1057,15 @@ export function Sessions() {
         return;
       }
       try {
-        const [{ data: vData }, { data: hData }, { data: sData }, { data: eData }, { data: aData }, { data: mData }, { data: tData }] = await Promise.all([
+        const [{ data: vData }, { data: hData }, { data: sData }, { data: aData }, { data: mData }, { data: tData }, { data: templateMemberRows }, { data: enrollmentRows }] = await Promise.all([
           supabase.from('mentis_venues').select('id,name'),
           supabase.from('mentis_holiday_calendar').select('*').order('starts_on'),
-          supabase.from('mentis_sessions').select('id,name,venue_id,start_at,end_at,status,schedule_id,mentis_venues(name)').order('start_at').limit(300),
-          supabase.from('mentis_enrollments').select('session_id,member_id,mentis_members(id,name)').limit(1000),
+          supabase.from('mentis_sessions').select('id,template_id,name,venue_id,start_at,end_at,status,schedule_id,mentis_venues(name)').order('start_at').limit(300),
           supabase.from('mentis_attendance_records').select('session_id,member_id,status').limit(2000),
           supabase.from('mentis_members').select('id,name').order('name').limit(500),
           supabase.from('mentis_prospects').select('id,name,status').limit(200),
+          supabase.from('mentis_session_template_members').select('template_id,member_id,valid_from,valid_to').limit(5000),
+          supabase.from('mentis_enrollments').select('session_id,member_id,valid_from,valid_to').limit(5000),
         ]);
         setTasters(tData ?? []);
         if (!alive) return;
@@ -1091,6 +1093,7 @@ export function Sessions() {
           }
           groupMap.get(key)!.sessions.push({
             id: s.id,
+            template_id: s.template_id,
             name: s.name,
             venue_id: s.venue_id,
             venue_name: s.mentis_venues?.name,
@@ -1100,21 +1103,15 @@ export function Sessions() {
             schedule_id: s.schedule_id,
           });
         });
-        // Attach memberIds from enrollments
-        const enrollMap = new Map<string, Set<string>>();
-        (eData ?? []).forEach((e: any) => {
-          const sessId = e.session_id;
-          // find group containing this session
-          for (const g of groupMap.values()) {
-            if (g.sessions.some(ss => ss.id === sessId)) {
-              if (!enrollMap.has(g.key)) enrollMap.set(g.key, new Set());
-              enrollMap.get(g.key)!.add(e.member_id);
-            }
-          }
-        });
-        enrollMap.forEach((set, key) => {
-          const g = groupMap.get(key);
-          if (g) g.memberIds = Array.from(set);
+        const templateMemberRowsNormalized = (templateMemberRows ?? []) as Array<{ template_id?: string | null; member_id?: string | null; valid_from?: string | null; valid_to?: string | null }>;
+        const enrollmentRowsNormalized = (enrollmentRows ?? []) as Array<{ session_id?: string | null; member_id?: string | null; valid_from?: string | null; valid_to?: string | null }>;
+
+        groupMap.forEach((group) => {
+          group.memberIds = resolveGroupMemberIds(
+            group,
+            templateMemberRowsNormalized,
+            enrollmentRowsNormalized,
+          );
         });
 
         const allGroups = Array.from(groupMap.values()).map(g => ({
@@ -1281,10 +1278,6 @@ export function Sessions() {
             <Button intent="secondary" size="sm" iconLeft={<Download className="size-4" />} onClick={exportCsv} disabled={!selectedGroup}>
               Export CSV
             </Button>
-            <Link to="/templates" className="btn btn-ghost btn-sm">
-              <Layers className="size-4" />
-              Blueprints
-            </Link>
             <Link to="/scheduling" className="btn btn-ghost btn-sm">
               <Timer className="size-4" />
               Scheduling
@@ -1292,18 +1285,6 @@ export function Sessions() {
           </div>
         }
       />
-
-      {/* Blueprints are the source of truth for what a session is; the recurring
-          helpers below clone an existing instance, which is the legacy path. */}
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-inset/60 px-3 py-2 text-xs text-ink-muted">
-        <Layers className="size-3.5 text-brand" aria-hidden />
-        <span>
-          Schedules should be authored once as a <strong className="font-semibold text-ink">blueprint</strong> — venue,
-          staffing plan and roster — then published as a recurring series. The recurrence tools here still work, but they
-          clone a single session row.
-        </span>
-        <Link to="/templates" className="btn btn-ghost btn-sm">Open blueprints</Link>
-      </div>
 
       {/* Venue Workbook Tabs - Top level grouping */}
       <div className="card p-2">
@@ -1384,14 +1365,9 @@ export function Sessions() {
             )}
           </div>
           {selectedBulkGroups.length > 0 && (
-            <div className="flex items-center gap-2">
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowBulkRecurringDialog(true)}>
-                Apply common recurring pattern ({selectedBulkGroups.length})
-              </button>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={resetSelectedOccurrences}>
-                Reset selected occurrences
-              </button>
-            </div>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowBulkRecurringDialog(true)}>
+              Apply common recurring pattern ({selectedBulkGroups.length})
+            </button>
           )}
         </div>
         <div className="flex items-center justify-between border-b border-line bg-surface-inset/50 px-3 py-2">
@@ -1434,7 +1410,6 @@ export function Sessions() {
                       toggleBulkGroupSelection(g.key);
                       return;
                     }
-                    setSelectedGroupKeys([]);
                     setSelectedGroupKey(g.key);
                   }}
                   className={cn(
@@ -1627,12 +1602,12 @@ export function Sessions() {
                           <th
                             key={sess.id}
                             className={cn(
-                              'min-w-[80px] border-b border-r border-line p-1 text-center align-bottom',
+                              'min-w-[80px] border-b border-r border-slate-200 bg-slate-50 p-1 text-center align-bottom text-slate-600 shadow-[inset_0_-1px_0_rgba(148,163,184,0.4)]',
                               hol
-                                ? 'bg-danger text-white'
+                                ? 'bg-red-50 text-red-700 border-red-200'
                                 : isWeekend
-                                ? 'bg-surface-inset'
-                                : 'bg-surface',
+                                ? 'bg-slate-100 text-slate-600'
+                                : 'bg-slate-50 text-slate-600',
                               hol && 'relative overflow-hidden'
                             )}
                             title={hol ? `${hol.name} (${hol.kind}) — No session` : `${dateStr} ${new Date(sess.start_at).toLocaleTimeString()}`}
@@ -1640,7 +1615,7 @@ export function Sessions() {
                             <button
                               type="button"
                               onClick={() => openSessionEditor(sess)}
-                              className="w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]"
+                              className="w-full rounded-md border border-transparent px-1 py-1 text-left transition-all hover:border-sky-200 hover:bg-sky-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200"
                               aria-label={`Edit this session: ${sess.name} on ${dateStr}`}
                             >
                               {hol && (
@@ -1670,9 +1645,9 @@ export function Sessions() {
                               )}
                             </button>
                             {!hol && (
-                              <div className="mt-1 border-t border-line/40 pt-0.5">
+                              <div className="mt-1 border-t border-slate-200 pt-0.5">
                                 <select
-                                  className="w-full bg-transparent text-[9px] font-medium text-ink-muted focus:outline-none"
+                                  className="w-full bg-transparent text-[9px] font-medium text-slate-500 focus:outline-none"
                                   value={colFilter}
                                   onChange={e => setDateColumnFilters(prev => ({ ...prev, [sess.id]: e.target.value as any }))}
                                   title="Filter attendance on this date"
@@ -1752,11 +1727,11 @@ export function Sessions() {
                                 <button
                                   onClick={() => cycleAttendance(m.id, sess.id)}
                                   className={cn(
-                                    'grid h-9 w-full place-items-center transition-all hover:scale-105 hover:z-10 hover:shadow-sm',
-                                    status === 'present' && 'bg-success-soft text-success hover:bg-success/20',
-                                    status === 'absent' && 'bg-transparent text-ink-faint hover:bg-surface-hover',
-                                    status === 'late' && 'bg-warning-soft text-warning hover:bg-warning/20',
-                                    status === 'taster' && 'bg-info-soft text-info'
+                                    'grid h-9 w-full place-items-center transition-all hover:scale-[1.02] hover:z-10 hover:shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25),0_2px_8px_rgba(148,163,184,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200',
+                                    status === 'present' && 'bg-success-soft text-success ring-1 ring-emerald-200 hover:bg-success/20',
+                                    status === 'absent' && 'bg-white text-slate-500 hover:bg-slate-50 ring-1 ring-slate-200',
+                                    status === 'late' && 'bg-warning-soft text-warning ring-1 ring-amber-200 hover:bg-warning/20',
+                                    status === 'taster' && 'bg-sky-50 text-sky-700 ring-1 ring-sky-200'
                                   )}
                                   title={`${m.name} — ${dateStr}: ${status} (click to cycle)`}
                                 >
@@ -1955,44 +1930,29 @@ export function Sessions() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <button className="btn btn-ghost" onClick={previewBulkRecurringPattern}>Preview generated dates</button>
                 <button className="btn btn-primary" onClick={applyBulkRecurringPattern} disabled={!recurrencePreview.length}>Apply common pattern</button>
-                <button className="btn btn-secondary" onClick={resetSelectedOccurrences} disabled={!selectedBulkGroups.length && !selectedGroup}>Reset selected occurrences</button>
               </div>
               {recurrenceSummary && recurrencePreview.length > 0 && (
-                <div className="mt-3 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4">
-                  <div className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Preview summary</div>
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-[10px] uppercase tracking-wide text-slate-500">Generated across</div>
-                      <div className="mt-1 text-2xl font-black text-slate-900">{recurrenceSummary.weeksCovered} weeks</div>
+                <div className="mt-3 rounded-lg border border-line bg-surface p-3">
+                  <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Preview summary</div>
+                  <div className="mb-3 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-md border border-slate-300 bg-slate-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-600">Weeks covered</div>
+                      <div className="mt-1 text-lg font-bold text-slate-800">{recurrenceSummary.weeksCovered}</div>
+                      <div className="mt-1 text-[10px] text-slate-600">This range covers {recurrenceSummary.weeksCovered} calendar week(s).</div>
                     </div>
-
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">Venue totals</div>
-                      <div className="space-y-2">
+                    <div className="rounded-md border border-sky-300 bg-sky-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-sky-700">Venue totals</div>
+                      <div className="mt-1 space-y-1">
                         {recurrenceSummary.venueBreakdown.length ? recurrenceSummary.venueBreakdown.map(item => (
-                          <div key={item.venue} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-                            <span className="font-semibold text-slate-700">{item.venue}</span>
-                            <span className="font-black text-slate-900">{item.generated} sessions</span>
+                          <div key={item.venue} className="flex items-center justify-between gap-2 text-[11px] text-sky-800">
+                            <span className="font-medium">{item.venue}</span>
+                            <span className="font-bold">{item.generated} generated</span>
                           </div>
-                        )) : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] italic text-slate-500">No venue totals yet</div>}
-                        {(() => {
-                          const readingBreakdown = recurrenceSummary.venueBreakdown.filter(item => /reading.*school/i.test(item.venue));
-                          const readingTotal = readingBreakdown.reduce((sum, item) => sum + item.generated, 0);
-                          return readingTotal > 0 || readingBreakdown.length > 0 ? (
-                            <div className="flex items-center justify-between gap-3 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm">
-                              <span className="font-semibold text-sky-800">Reading School stats</span>
-                              <span className="font-black text-sky-900">{readingTotal} sessions</span>
-                            </div>
-                          ) : null;
-                        })()}
-                        <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
-                          <span className="font-semibold text-emerald-800">Total</span>
-                          <span className="font-black text-emerald-900">{recurrenceSummary.totalGenerated} sessions</span>
-                        </div>
+                        )) : <div className="text-[10px] italic text-sky-700">No venue totals yet</div>}
                       </div>
                     </div>
                   </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-3">
                     <div className="rounded-md border border-emerald-300 bg-emerald-50 p-2">
                       <div className="text-[10px] uppercase tracking-wide text-emerald-700">Generated sessions</div>
                       <div className="mt-1 text-lg font-bold text-emerald-800">{recurrenceSummary.totalGenerated}</div>
@@ -2153,41 +2113,27 @@ export function Sessions() {
               </div>
 
               {recurrenceSummary && recurrencePreview.length > 0 && (
-                <div className="mt-3 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4">
-                  <div className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Preview summary</div>
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-[10px] uppercase tracking-wide text-slate-500">Generated across</div>
-                      <div className="mt-1 text-2xl font-black text-slate-900">{recurrenceSummary.weeksCovered} weeks</div>
+                <div className="mt-3 rounded-lg border border-line bg-surface p-3">
+                  <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Preview summary</div>
+                  <div className="mb-3 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-md border border-slate-300 bg-slate-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-600">Weeks covered</div>
+                      <div className="mt-1 text-lg font-bold text-slate-800">{recurrenceSummary.weeksCovered}</div>
+                      <div className="mt-1 text-[10px] text-slate-600">This range covers {recurrenceSummary.weeksCovered} calendar week(s).</div>
                     </div>
-
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">Venue totals</div>
-                      <div className="space-y-2">
+                    <div className="rounded-md border border-sky-300 bg-sky-50 p-2">
+                      <div className="text-[10px] uppercase tracking-wide text-sky-700">Venue totals</div>
+                      <div className="mt-1 space-y-1">
                         {recurrenceSummary.venueBreakdown.length ? recurrenceSummary.venueBreakdown.map(item => (
-                          <div key={item.venue} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-                            <span className="font-semibold text-slate-700">{item.venue}</span>
-                            <span className="font-black text-slate-900">{item.generated} sessions</span>
+                          <div key={item.venue} className="flex items-center justify-between gap-2 text-[11px] text-sky-800">
+                            <span className="font-medium">{item.venue}</span>
+                            <span className="font-bold">{item.generated} generated</span>
                           </div>
-                        )) : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] italic text-slate-500">No venue totals yet</div>}
-                        {(() => {
-                          const readingBreakdown = recurrenceSummary.venueBreakdown.filter(item => /reading.*school/i.test(item.venue));
-                          const readingTotal = readingBreakdown.reduce((sum, item) => sum + item.generated, 0);
-                          return readingTotal > 0 || readingBreakdown.length > 0 ? (
-                            <div className="flex items-center justify-between gap-3 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm">
-                              <span className="font-semibold text-sky-800">Reading School stats</span>
-                              <span className="font-black text-sky-900">{readingTotal} sessions</span>
-                            </div>
-                          ) : null;
-                        })()}
-                        <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
-                          <span className="font-semibold text-emerald-800">Total</span>
-                          <span className="font-black text-emerald-900">{recurrenceSummary.totalGenerated} sessions</span>
-                        </div>
+                        )) : <div className="text-[10px] italic text-sky-700">No venue totals yet</div>}
                       </div>
                     </div>
                   </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-3">
                     <div className="rounded-md border border-emerald-300 bg-emerald-50 p-2">
                       <div className="text-[10px] uppercase tracking-wide text-emerald-700">Generated sessions</div>
                       <div className="mt-1 text-lg font-bold text-emerald-800">{recurrenceSummary.totalGenerated}</div>
@@ -2386,6 +2332,7 @@ export function Scheduling() {
   const [leadingCoachId, setLeadingCoachId] = useState('');
   const [assistingCoachId, setAssistingCoachId] = useState('');
   const [staffList, setStaffList] = useState<any[]>([]);
+  const coachStaffList = useMemo(() => staffList.filter(isCoachStaff), [staffList]);
 
   // Sorting for Scheduling table
   const [tableSortColumn, setTableSortColumn] = useState<'name' | 'venue' | 'start_at' | 'headcount' | 'status'>('start_at');
@@ -2445,7 +2392,7 @@ export function Scheduling() {
 
   const create = async () => {
     const { error } = await supabase.from('mentis_weekly_schedules').insert({ organization_id: staff?.organization_id, ...form });
-    if (error) alert(explainSessionInsertError(error)); else { setForm({ ...form, name: '' }); load(); }
+    if (error) alert(error.message); else { setForm({ ...form, name: '' }); load(); }
   };
 
   const saveSession = async () => {
@@ -2469,13 +2416,13 @@ export function Scheduling() {
     if (editingSessionId) {
       const { error } = await supabase.from('mentis_sessions').update(payload).eq('id', editingSessionId);
       if (error) {
-        alert(explainSessionInsertError(error));
+        alert(error.message);
         return;
       }
     } else {
       const { error } = await supabase.from('mentis_sessions').insert(payload);
       if (error) {
-        alert(explainSessionInsertError(error));
+        alert(error.message);
         return;
       }
     }
@@ -2609,7 +2556,6 @@ export function Scheduling() {
             >
               {showNewScheduling ? 'Close' : 'New Scheduling'}
             </button>
-            <Link to="/templates" className="btn btn-ghost">Blueprints</Link>
             <Link to="/overrides" className="btn btn-ghost">Overrides</Link>
           </div>
         }
@@ -2806,21 +2752,21 @@ export function Scheduling() {
                   Responsible Coach
                   <select className="input mt-1 text-xs" value={responsibleCoachId} onChange={e => setResponsibleCoachId(e.target.value)}>
                     <option value="">Select coach</option>
-                    {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+                    {coachStaffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
                   </select>
                 </label>
                 <label className="block text-xs">
                   Leading Coach
                   <select className="input mt-1 text-xs" value={leadingCoachId} onChange={e => setLeadingCoachId(e.target.value)}>
                     <option value="">Select coach</option>
-                    {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+                    {coachStaffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
                   </select>
                 </label>
                 <label className="block text-xs">
                   Assisting Coach
                   <select className="input mt-1 text-xs" value={assistingCoachId} onChange={e => setAssistingCoachId(e.target.value)}>
                     <option value="">Select coach</option>
-                    {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+                    {coachStaffList.map((s: any) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
                   </select>
                 </label>
               </div>

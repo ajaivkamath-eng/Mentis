@@ -72,35 +72,40 @@ export function NavList({ collapsed = false, onNavigate, layoutKey = 'sidebar', 
     [groups, pathname],
   );
 
-  const [open, setOpen] = usePersistentState<string[]>('mentis.navGroups', ['overview', 'work']);
+  const [open, setOpen] = usePersistentState<string | null>('mentis.navOpenGroup', 'overview');
 
-  // Never hide the section you are working in.
+  // Keep the active section visible and ensure only one section remains expanded.
   useEffect(() => {
-    if (activeGroup && !open.includes(activeGroup)) setOpen((prev) => [...prev, activeGroup]);
+    if (activeGroup && open !== activeGroup) setOpen(activeGroup);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGroup]);
 
-  const toggle = (id: string) => setOpen((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]));
+  const toggle = (id: string) => setOpen((prev) => (prev === id ? id : id));
 
   return (
     <nav aria-label="Main" className={cn('flex flex-col gap-0.5 overflow-y-auto py-1 no-scrollbar', className)}>
       {groups.map((group) => {
-        const isOpen = collapsed || open.includes(group.id);
+        const isOpen = collapsed ? false : open === group.id;
         const hasActive = group.id === activeGroup;
         return (
           <div key={group.id} className="mb-1">
             {!collapsed && (
               <button
                 type="button"
-                onClick={() => toggle(group.id)}
+                onClick={() => setOpen(group.id)}
                 aria-expanded={isOpen}
                 className={cn(
-                  'flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors',
-                  'hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]',
+                  'group flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left transition-all duration-150',
+                  'border border-transparent hover:border-[var(--border-strong)] hover:bg-surface-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]',
+                  hasActive && 'bg-brand-soft/40 text-brand-text shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--brand)_18%,transparent)]',
                 )}
               >
-                <span className={cn('overline', hasActive && 'text-brand-text')}>{group.label}</span>
-                <motion.span animate={{ rotate: isOpen ? 0 : -90 }} transition={transition.fast} className="text-ink-faint">
+                <span className={cn('overline transition-colors', hasActive && 'text-brand-text')}>{group.label}</span>
+                <motion.span
+                  animate={{ rotate: isOpen ? 0 : -90 }}
+                  transition={transition.fast}
+                  className={cn('text-ink-faint transition-transform group-hover:text-ink', hasActive && 'text-brand-text')}
+                >
                   <ChevronDown className="size-3.5" aria-hidden />
                 </motion.span>
               </button>
@@ -121,7 +126,10 @@ export function NavList({ collapsed = false, onNavigate, layoutKey = 'sidebar', 
                       <NavLink
                         to={item.to}
                         end={item.to === '/'}
-                        onClick={onNavigate}
+                        onClick={() => {
+                          setOpen(group.id);
+                          onNavigate?.();
+                        }}
                         className={({ isActive }) => cn('navlink', isActive && 'active', collapsed && 'justify-center px-0')}
                       >
                         {({ isActive }) => (

@@ -1,34 +1,44 @@
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useEffect, type ReactNode } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
-import { pageVariants, transition } from '../../lib/motion';
+import { transition } from '../../lib/motion';
+
+function EnteringPage({ children }: { children: ReactNode }) {
+  const [entering, setEntering] = useState(true);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setEntering(false), (transition.deliberate.duration ?? 0.5) * 1000 + 100);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  return (
+    <div className="relative">
+      {entering && (
+        <div role="status" aria-label="Loading page" className="absolute inset-0 z-10 grid min-h-64 place-items-center bg-bg">
+          <span className="size-9 animate-spin rounded-full border-[3px] border-line border-r-brand motion-reduce:animate-none" aria-hidden="true" />
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
 
 /**
  * PageTransition — one place where "moving between screens" gets its feel.
  *
- * • exit/enter run concurrently so navigation never feels gated
- * • the animation is transform+opacity only (composited, no layout thrash)
+ * • new routes mount immediately, including in background tabs
  * • scroll resets on route change, because a console that keeps you halfway
  *   down the previous page is disorienting
  * • `prefers-reduced-motion` collapses it to an instant swap
  */
 export function PageTransition({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
-  const reduce = useReducedMotion();
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, [pathname]);
 
-  if (reduce) return <div key={pathname}>{children}</div>;
-
-  return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div key={pathname} variants={pageVariants} initial="initial" animate="animate" exit="exit">
-        {children}
-      </motion.div>
-    </AnimatePresence>
-  );
+  return <EnteringPage key={pathname}>{children}</EnteringPage>;
 }
 
 /**

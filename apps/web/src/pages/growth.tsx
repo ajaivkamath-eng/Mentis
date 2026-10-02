@@ -60,8 +60,8 @@ export function ProgressReports() {
       { organization_id: staff?.organization_id, member_id: memberId, period, status },
       { onConflict: 'member_id,period' }).select('id').single();
     if (status === 'sent' && data) {
-      const { data: m } = await supabase.from('mentis_members').select('mentis_customers(email)').eq('id', memberId).single();
-      const email = (m as any)?.customers?.email;
+      const { data: m } = await supabase.from('mentis_members').select('mentis_customers!customer_id_fkey(email)').eq('id', memberId).single();
+      const email = (m as any)?.mentis_customers?.email ?? (m as any)?.customers?.email;
       if (email) {
         await fetch(functionsUrl('send-email'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ organizationId: staff?.organization_id, to: email, subject: `Progress report ${period}`, body: preview, template: 'progressReport', kind: 'report' }) });

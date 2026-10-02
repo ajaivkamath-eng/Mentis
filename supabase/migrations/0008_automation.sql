@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0008_automation.sql';
+END $$;
+
+
 -- Mentis automation: conflict guards, billing-ledger sync, audit trail,
 -- staffing-status view, storage buckets, scheduled jobs.
 create extension if not exists pg_cron;
@@ -12,7 +18,7 @@ begin
     where venue_id = new.venue_id and id <> coalesce(new.id, '00000000-0000-0000-0000-000000000000')
       and status <> 'cancelled' and start_at < new.end_at and new.start_at < end_at;
   if clash >= coalesce(limit_v, 1) then
-    raise exception 'venue concurrency limit (%) exceeded for this time slot', coalesce(limit_v, 1);
+    raise exception '%: venue concurrency limit (%) exceeded for this time slot', '0008_automation.sql', coalesce(limit_v, 1);
   end if;
   return new;
 end $$;
@@ -29,7 +35,7 @@ begin
     join mentis_sessions n on n.id = new.session_id
     where ss.staff_id = new.staff_id and ss.session_id <> new.session_id
       and s.status <> 'cancelled' and s.start_at < n.end_at and n.start_at < s.end_at;
-  if clash > 0 then raise exception 'staff member already has an overlapping session'; end if;
+  if clash > 0 then raise exception '%: staff member already has an overlapping session', '0008_automation.sql'; end if;
   return new;
 end $$;
 drop trigger if exists staffing_overlap_guard on mentis_session_staffing;
@@ -42,7 +48,7 @@ begin
   if exists (select 1 from mentis_holiday_calendar
       where organization_id = new.organization_id
         and daterange(starts_on, ends_on, '[]') && daterange(new.start_at::date, new.end_at::date, '[]')) then
-    raise exception 'session falls on a holiday / no-session day';
+    raise exception '%: session falls on a holiday / no-session day', '0008_automation.sql';
   end if;
   return new;
 end $$;
@@ -56,7 +62,7 @@ begin
   if is_admin(new.organization_id) then return new; end if;
   if new.venue_id <> old.venue_id or new.start_at <> old.start_at or new.end_at <> old.end_at
      or new.status <> old.status or new.organization_id <> old.organization_id then
-    raise exception 'coaches may only edit session notes';
+    raise exception '%: coaches may only edit session notes', '0008_automation.sql';
   end if;
   return new;
 end $$;
@@ -68,7 +74,7 @@ create trigger sessions_coach_guard before update on mentis_sessions
 create or replace function guard_locked_invoice_insert() returns trigger language plpgsql as $$
 begin
   if exists (select 1 from mentis_invoices where id = new.invoice_id and status in ('approved', 'paid')) then
-    raise exception 'approved invoice is locked';
+    raise exception '%: approved invoice is locked', '0008_automation.sql';
   end if;
   return new;
 end $$;
@@ -84,12 +90,24 @@ begin
     update mentis_staff_time_entries set bill_state = 'billed' where id = new.time_entry_id;
     select * into entry from mentis_staff_time_entries where id = new.time_entry_id;
     insert into mentis_billing_ledger (organization_id, item_type, time_entry_id, staff_id, invoice_id, status)
-      values (entry.organization_id, 'timeEntry', new.time_entry_id, entry.staff_id, new.invoice_id, 'billed')
-      on conflict do nothing;
+      select entry.organization_id, 'timeEntry', new.time_entry_id, entry.staff_id, new.invoice_id, 'billed'
+      where not exists (
+        select 1 from mentis_billing_ledger l
+        where l.time_entry_id = new.time_entry_id
+          and l.invoice_id = new.invoice_id
+          and l.item_type = 'timeEntry'
+      );
   else
     insert into mentis_billing_ledger (organization_id, item_type, task_id, staff_id, invoice_id, status)
       select t.organization_id, 'task', new.task_id, t.assignee_id, new.invoice_id, 'billed'
-      from mentis_tasks t where t.id = new.task_id on conflict do nothing;
+      from mentis_tasks t
+      where t.id = new.task_id
+        and not exists (
+          select 1 from mentis_billing_ledger l
+          where l.task_id = new.task_id
+            and l.invoice_id = new.invoice_id
+            and l.item_type = 'task'
+        );
   end if;
   return new;
 end $$;
@@ -166,3 +184,4 @@ select cron.schedule('mentis-monthly-summary', '0 6 1 * *',
 select cron.schedule('mentis-breach-eval', '*/15 * * * *',
   $$ select net.http_post('https://project.functions.supabase.co/breach-eval',
     '{}', '{"Content-Type":"application/json"}') $$) where false;
+

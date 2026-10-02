@@ -46,9 +46,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
+
+    supabase.auth.getSession().then(({ data }) => {
+      console.log('APP SESSION:', {
+        userId: data.session?.user.id,
+        email: data.session?.user.email,
+        url: import.meta.env.VITE_SUPABASE_URL,
+      });
+    });
+
     setLoading(true);
     supabase.from('mentis_staff').select('*').eq('user_id', userId).limit(1).single()
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (!data || error) {
+          console.log('NO LINKED STAFF ROW:', {
+            userId,
+            error: error?.message ?? 'No mentis_staff record found',
+          });
+          setStaff(null);
+          setRole(null);
+          setLoading(false);
+          return;
+        }
+
         setStaff((data as StaffRow) ?? null);
         setRole((r) => r ?? (data ? switchableRoles(data.roles as Role[])[0] ?? null : null));
         setLoading(false);
@@ -75,4 +95,26 @@ export function useAuth(): AuthState {
   const v = useContext(Ctx);
   if (!v) throw new Error('useAuth outside provider');
   return v;
+}
+
+if (typeof window !== 'undefined') {
+  (window as any).__mentisDebug = {
+    async check() {
+      const { data } = await supabase.auth.getSession();
+      console.log('DEBUG_SESSION', {
+        userId: data.session?.user.id,
+        email: data.session?.user.email,
+        url: import.meta.env.VITE_SUPABASE_URL,
+      });
+
+      const result = await supabase
+        .from('mentis_staff')
+        .select('*')
+        .eq('user_id', data.session?.user.id ?? '')
+        .limit(1);
+
+      console.log('DEBUG_STAFF_QUERY', result);
+      return result;
+    }
+  };
 }

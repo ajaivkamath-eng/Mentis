@@ -466,7 +466,7 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
     supabase.from('mentis_session_staffing').select(`
       id, session_id, staff_id, capacity, planned_start, planned_end,
       mentis_staff(display_name),
-      mentis_sessions(id, name, start_at, end_at, venue_id, mentis_venues(name))`)
+      mentis_session_occurrences(id, name, start_at, end_at, venue_id, mentis_venues(name))`)
       .in('staff_id', staffIds.length ? staffIds : ['00000000-0000-0000-0000-000000000000'])
       .gte('planned_end', sessFrom).lte('planned_start', sessTo).limit(1000),
     supabase.from('mentis_rate_cards').select('id, staff_id, label, rate_cents, valid_from'),
@@ -481,7 +481,7 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
   for (const s of staffingRes.data ?? []) {
     const role = s.capacity === 'sparrer' ? 'spare' : (s.capacity as 'lead' | 'assistant');
     const rate = rateOf(s.staff_id);
-    const sess = (s.mentis_sessions ?? {}) as AnyRow;
+    const sess = (s.mentis_session_occurrences ?? {}) as AnyRow;
     const venueName = Array.isArray(sess.mentis_venues) ? (sess.mentis_venues[0] as AnyRow | undefined)?.name : (sess.mentis_venues as AnyRow | undefined)?.name;
     const staffName = Array.isArray(s.mentis_staff) ? (s.mentis_staff[0] as AnyRow | undefined)?.display_name : (s.mentis_staff as AnyRow | undefined)?.display_name;
     events.push({

@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: local_reset_and_seed.sql';
+END $$;
+
+
 -- Local reset + org alignment + staff link script for Mentis
 -- This keeps auth.users intact, clears imported roster data, and re-aligns staff to the Kingfisher org.
 
@@ -65,3 +71,4 @@ COMMIT;
 -- 4) Optional: import the roster again using the existing sample file after this reset.
 -- Example:
 -- docker exec -i supabase_db_Mentis psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/session_schedule_seed.sql
+

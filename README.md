@@ -9,7 +9,7 @@ separate Mentis role set. Supabase Auth is the only login.
 
 | Path | What |
 |---|---|
-| `packages/core` | Shared TS core: entities, validation, RBAC matrix, billing, scheduling, session blueprints (templates + recurrence + drift), offline sync, competition, actions, ICS, GDPR, comms, bookings, reports, CSV import |
+| `packages/core` | Shared TS core: entities, validation, RBAC matrix, billing, scheduling, program blueprints (templates + recurrence + drift), offline sync, competition, actions, ICS, GDPR, comms, bookings, reports, CSV import |
 | `supabase/migrations` | Postgres schema + RLS matrix + guards + seeds + automation |
 | `supabase/functions` | Edge Functions: email, public taster API, public diary, member micro-flow, breach evaluator, monthly summary, task reminders |
 | `supabase/tests/rls_matrix.sql` | Per-entity × role × command RLS tests (also run in CI via PGlite) |
@@ -115,9 +115,11 @@ Change a value in `tokens.ts`, run the tests, and both platforms follow.
 
 ## Business rules → code
 
-Sessions and recurring series are **instances of a blueprint**: a session
-template (venue, slot, staffing plan, default roster) is authored once and
-published into a series, with per-instance drill-down — see
+Program blueprints define the reusable structure. A program is then created as a
+concrete period or season by the user when a new run begins or restarts, and a
+session is the actual execution instance scheduled on a date with staffing,
+attendance, and billing data. The blueprint stays reusable; the program is the
+user-created run; the session is the actual scheduled occurrence — see
 [`docs/session-templates.md`](docs/session-templates.md).
 
 All 31 rules in the dev prompt are implemented in `packages/core` (pure,

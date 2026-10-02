@@ -167,6 +167,6 @@ describe('AppShell', () => {
     await act(async () => {
       window.dispatchEvent(new Event('offline'));
     });
-    expect(await screen.findByRole('status')).toHaveTextContent(/offline/i);
+    expect(await screen.findByText(/you are offline/i)).toHaveAttribute('role', 'status');
   });
 });

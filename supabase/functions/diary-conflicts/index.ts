@@ -23,7 +23,7 @@ Deno.serve(async () => {
   for (const c of conflicts ?? []) {
     if (!c.session_id) continue;
     const { data: session } = await supabase
-      .from('mentis_sessions')
+      .from('mentis_session_occurrences')
       .select('id, name, start_at, responsible_coach_id')
       .eq('id', c.session_id)
       .single();

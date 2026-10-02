@@ -7,8 +7,8 @@
 ## Why
 
 Before this change a recurring session was created *from an instance*: the
-Sessions workbook took a row of `mentis_sessions`, let an admin pick a pattern
-and then inserted more `mentis_sessions` rows. The pattern therefore lived only
+Sessions workbook took a row of `mentis_session_occurrences`, let an admin pick a pattern
+and then inserted more `mentis_session_occurrences` rows. The pattern therefore lived only
 in the rows it produced — nothing described *what the session is*. Editing the
 "series" meant editing instances, and the old `mentis_weekly_schedules`
 (generate-a-`session`-from-a-pattern) was a second, competing notion of the
@@ -17,12 +17,12 @@ same idea.
 Now the relationship is the right way round:
 
 ```
-mentis_session_templates            the blueprint — what a session is
+mentis_sessions            the blueprint — what a session is
   ├── mentis_session_template_staffing    default staffing plan (role slots)
   ├── mentis_session_template_members     default roster
   └── mentis_recurrence_rules             when it repeats
         └── mentis_session_series         a published run of the blueprint
-              └── mentis_sessions         instances (register, diary, billing)
+              └── mentis_session_occurrences         instances (register, diary, billing)
 ```
 
 Instances stay first-class rows — attendance, enrolments, diary entries,
@@ -40,7 +40,7 @@ provenance:
 
 ## The model
 
-- **Blueprint** (`mentis_session_templates`) — name, code, venue, default
+- **Blueprint** (`mentis_sessions`) — name, code, venue, default
   start/end time, time zone, level band, capacity, default coaches, tags,
   charge, `status` (`draft | active | archived`) and a `version` that the
   `session_templates_touch` trigger bumps on any material edit (name, venue,

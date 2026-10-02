@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0005_money_comms.sql';
+END $$;
+
+
 -- Mentis money trail, comms log, Phase-6 mentis_bookings/reports, device mentis_sessions.
 create table mentis_billing_ledger (
   id uuid primary key default gen_random_uuid(), organization_id uuid not null references mentis_organizations(id),
@@ -57,3 +63,4 @@ alter table mentis_tasks add column created_by uuid;
 create index ledger_staff_idx on mentis_billing_ledger(staff_id, status);
 create index charges_customer_idx on mentis_customer_charges(customer_id, status);
 create index comms_kind_idx on mentis_communication_log(organization_id, kind, sent_at desc);
+

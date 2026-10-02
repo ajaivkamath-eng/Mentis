@@ -11,7 +11,7 @@ import { Events, MatchEntry, RankingEntry, Goals, Analytics } from './pages/comp
 import { PublicTaster, PublicDiary, Microflow, Booking12 } from './pages/public';
 import { Venues, Groups, RateCards, Holidays, Overrides, ActionTimelines, Devices, AuditViewer } from './pages/manage';
 import { Importer } from './pages/importer';
-import { MemberForm, CustomerForm, Enrolments } from './pages/people';
+import { MemberForm, CustomerForm, Enrolments, CoachProfile } from './pages/people';
 import { Staffing, SessionClose } from './pages/staffing';
 import { Availability } from './pages/availability';
 import { ActionCreate } from './pages/actions';
@@ -21,7 +21,23 @@ import { ProgressReports, CoachPerformance, SparringMatcher, AutoSuggest } from 
 import { VenueDashboard, MemberSessions, IcsExport } from './pages/dashboards';
 import { DesignSystem } from './pages/design-system';
 import { CommandPaletteProvider } from './components/patterns/command-palette';
-import type { ReactElement } from 'react';
+import { useEffect, type ReactElement } from 'react';
+
+function BootReady() {
+  const { loading } = useAuth();
+
+  useEffect(() => {
+    if (loading) return;
+    const boot = document.getElementById('boot');
+    if (!boot) return;
+    boot.style.transition = 'opacity 220ms ease-out';
+    boot.style.opacity = '0';
+    const timeout = window.setTimeout(() => boot.remove(), 240);
+    return () => window.clearTimeout(timeout);
+  }, [loading]);
+
+  return null;
+}
 
 /** Guard + frame in one call: every authenticated route looks the same. */
 const P = (perm: any, el: ReactElement) => (
@@ -41,6 +57,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <AuthedPalette>
+          <BootReady />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/taster" element={<PublicTaster />} />
@@ -49,6 +66,7 @@ export default function App() {
             <Route path="/book" element={<Booking12 />} />
             <Route path="/" element={P(undefined, <Dashboard />)} />
             <Route path="/today" element={P('sessions.assigned', <Today />)} />
+            <Route path="/profile" element={P('staff.self', <CoachProfile />)} />
             <Route path="/register/:id" element={P('attendance.view', <Register />)} />
             <Route path="/feedback/:source/:id" element={P('events.manage', <Feedback />)} />
             <Route path="/members" element={P('customers.view', <Members />)} />
@@ -60,7 +78,10 @@ export default function App() {
             <Route path="/enrolments" element={P('sessions.manage', <Enrolments />)} />
             <Route path="/tasters" element={P('tasters.manage', <Tasters />)} />
             <Route path="/sessions" element={P('sessions.manage', <Sessions />)} />
+            <Route path="/programs" element={P('sessions.manage', <Sessions />)} />
+            <Route path="/program-runs" element={P('sessions.manage', <Sessions />)} />
             <Route path="/scheduling" element={P('sessions.manage', <Scheduling />)} />
+            <Route path="/program-blueprints" element={P('sessions.manage', <SessionTemplates />)} />
             <Route path="/templates" element={P('sessions.manage', <SessionTemplates />)} />
             <Route path="/overrides" element={P('sessions.manage', <Overrides />)} />
             <Route path="/holidays" element={P('sessions.manage', <Holidays />)} />

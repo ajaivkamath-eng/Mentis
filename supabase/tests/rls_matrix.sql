@@ -59,9 +59,11 @@ insert into mentis_members (id, organization_id, customer_id, name, date_of_birt
 on conflict (id) do nothing;
 insert into mentis_member_medical (member_id, notes) values ('d0000000-0000-0000-0000-000000000001', 'test note')
 on conflict (member_id) do nothing;
-insert into mentis_sessions (id, organization_id, venue_id, name, start_at, end_at, status) values
-  ('e0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS Session', '2026-03-03T18:00:00Z', '2026-03-03T19:00:00Z', 'scheduled')
-on conflict (id) do nothing;
+insert into mentis_sessions (id, organization_id, venue_id, name, start_at, end_at, status)
+select 'e0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS Session', '2026-03-03T18:00:00Z'::timestamptz, '2026-03-03T19:00:00Z'::timestamptz, 'scheduled'
+where not exists (
+  select 1 from mentis_sessions where id = 'e0000000-0000-0000-0000-000000000001'
+);
 insert into mentis_enrollments (session_id, member_id, status, expected) values
   ('e0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', 'active', true)
 on conflict (session_id, member_id) do nothing;
@@ -129,11 +131,11 @@ select mentis_test_must_fail('approved invoice is locked',
 -- 6. Venue concurrency (rule 17) + back-to-back ------------------------------------
 select mentis_test_clear_uid();
 select mentis_test_must_fail('venue overlap blocked',
-  $$ insert into mentis_sessions (organization_id, venue_id, name, start_at, end_at)
+  $$ insert into mentis_session_occurrences (organization_id, venue_id, name, start_at, end_at)
      values ('00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS Clash', '2026-03-03T18:30:00Z', '2026-03-03T19:30:00Z') $$);
-insert into mentis_sessions (organization_id, venue_id, name, start_at, end_at)
+insert into mentis_session_occurrences (organization_id, venue_id, name, start_at, end_at)
   values ('00000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'RLS BackToBack', '2026-03-03T19:00:00Z', '2026-03-03T20:00:00Z');
-select mentis_test_ok('back-to-back allowed', exists (select 1 from mentis_sessions where name = 'RLS BackToBack'));
+select mentis_test_ok('back-to-back allowed', exists (select 1 from mentis_session_occurrences where name = 'RLS BackToBack'));
 
 -- 7. Staff management is super-admin-only -------------------------------------------
 select mentis_test_set_uid('a0000000-0000-0000-0000-000000000001');

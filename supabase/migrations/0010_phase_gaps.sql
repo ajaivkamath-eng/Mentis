@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  RAISE NOTICE 'Running migration file: 0010_phase_gaps.sql';
+END $$;
+
+
 -- Mentis phase-gap schema: work notes, review SLA offsets, member self-service
 -- codes, device push tokens, and org-level policy key/values.
 alter table mentis_tasks add column if not exists work_notes text;
@@ -33,3 +39,4 @@ on conflict (organization_id, key) do nothing;
 select cron.schedule('mentis-task-reminders', '0 * * * *',
   $$ select net.http_post('https://project.functions.supabase.co/task-reminders',
     '{}', '{"Content-Type":"application/json"}') $$) where false;
+

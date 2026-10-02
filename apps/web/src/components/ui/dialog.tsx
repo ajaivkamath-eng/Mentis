@@ -69,7 +69,7 @@ export function DialogContent({
               exit="exit"
               className={cn(
                 'fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2',
-                'card shadow-[var(--shadow-e4)]',
+                'rounded-2xl border border-line bg-surface shadow-[var(--shadow-e4)]',
                 'max-h-[90vh] overflow-y-auto',
                 sizeMap[size],
                 className,
@@ -93,12 +93,12 @@ export function DialogContent({
 }
 
 export function DialogHeader({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn('flex flex-col gap-1 px-6 pt-6 pb-4', className)}>{children}</div>;
+  return <div className={cn('flex flex-col gap-1 px-5 pt-5 pb-3', className)}>{children}</div>;
 }
 
 export function DialogTitle({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <RadixDialog.Title className={cn('font-display text-xl font-bold tracking-[-0.02em] text-ink', className)}>
+    <RadixDialog.Title className={cn('font-display text-lg font-semibold tracking-[-0.02em] text-ink', className)}>
       {children}
     </RadixDialog.Title>
   );
@@ -106,19 +106,19 @@ export function DialogTitle({ className, children }: { className?: string; child
 
 export function DialogDescription({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <RadixDialog.Description className={cn('text-sm leading-relaxed text-ink-muted', className)}>
+    <RadixDialog.Description className={cn('text-xs leading-relaxed text-ink-muted', className)}>
       {children}
     </RadixDialog.Description>
   );
 }
 
 export function DialogBody({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn('px-6 pb-5', className)}>{children}</div>;
+  return <div className={cn('px-5 pb-4', className)}>{children}</div>;
 }
 
 export function DialogFooter({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <div className={cn('flex flex-wrap items-center justify-end gap-2 border-t border-line px-6 py-4', className)}>
+    <div className={cn('flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-3', className)}>
       {children}
     </div>
   );
