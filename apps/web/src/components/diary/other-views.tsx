@@ -7,13 +7,14 @@
 import { useState } from 'react';
 import { layoutOverlaps } from '@mentis/core';
 import type { DiaryEvent } from '@mentis/core';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import {
   KIND, WEEKDAYS, addDays, eventsOnDay, fmtDayLong, fmtTimeRange, kindStyle,
   parseKey, sameDay, startOfDay, startOfWeek,
 } from '../../lib/diary/model';
 import { EventChip } from './event-block';
+import type { Anchor } from './floating';
 import type { StaffOption } from '../../lib/diary/store';
 
 const MS_DAY = 86_400_000;
@@ -23,16 +24,18 @@ const MS_DAY = 86_400_000;
 /* ------------------------------------------------------------------ */
 
 export function MonthGrid({
-  monthAnchor, events, selectedIds, onSelect, onOpen, onOpenDay, onMoveDay, onEdit,
+  monthAnchor, events, selectedIds, onSelect, onOpen, onOpenDay, onMoveDay, onEdit, onCreateDay, canMove = () => true,
 }: {
   monthAnchor: Date;
   events: DiaryEvent[];
   selectedIds: ReadonlySet<string>;
   onSelect: (id: string, e: React.MouseEvent) => void;
-  onOpen: (ev: DiaryEvent, anchor: { x: number; y: number }) => void;
+  onOpen: (ev: DiaryEvent, anchor: Anchor) => void;
   onOpenDay: (day: Date) => void;
   onMoveDay: (ev: DiaryEvent, day: Date) => void;
   onEdit: (ev: DiaryEvent) => void;
+  onCreateDay: (day: Date) => void;
+  canMove?: (ev: DiaryEvent) => boolean;
 }) {
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -62,7 +65,7 @@ export function MonthGrid({
             <div
               key={key}
               className={cn(
-                'min-h-[104px] border-b border-r border-line p-1 transition-colors [&:nth-child(7n)]:border-r-0',
+                'group/month-cell relative min-h-[104px] cursor-pointer border-b border-r border-line p-1 transition-colors [&:nth-child(7n)]:border-r-0',
                 !inMonth && 'bg-surface-inset/50 text-ink-faint',
                 weekend && inMonth && 'bg-surface-inset/30',
                 dragOver === key && 'bg-brand-soft/50 ring-2 ring-inset ring-brand',
@@ -74,8 +77,12 @@ export function MonthGrid({
                 setDragOver(null);
                 if (id) {
                   const ev = events.find((x) => x.id === id);
-                  if (ev) onMoveDay(ev, day);
+                  if (ev && canMove(ev)) onMoveDay(ev, day);
                 }
+              }}
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest('button')) return;
+                onCreateDay(day);
               }}
             >
               <button
@@ -89,18 +96,25 @@ export function MonthGrid({
                 <span className={cn('grid size-5 place-items-center rounded-full', isToday && 'bg-brand text-brand-ink')}>{day.getDate()}</span>
                 {conflicts > 0 && <span className="rounded bg-[var(--danger)] px-1 text-[9px] font-black text-white">{conflicts} conflict{conflicts > 1 ? 's' : ''}</span>}
               </button>
+              <button
+                type="button"
+                aria-label={`Add entry on ${fmtDayLong(day)}`}
+                title="Add diary entry"
+                onClick={() => onCreateDay(day)}
+                className="absolute right-1 top-1 z-10 grid size-6 place-items-center rounded-md bg-surface-raised text-brand-text opacity-0 shadow-sm transition-opacity hover:bg-brand-soft focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] group-hover/month-cell:opacity-100"
+              ><Plus className="size-3.5" /></button>
               <div className="space-y-0.5">
                 {shown.map((ev) => (
                   <div
                     key={ev.id}
-                    draggable={!ev.system}
+                    draggable={canMove(ev)}
                     onDragStart={(e) => {
-                      if (ev.system) { e.preventDefault(); return; }
+                      if (!canMove(ev)) { e.preventDefault(); return; }
                       e.dataTransfer.setData('text/diary-event', ev.id);
                       e.dataTransfer.effectAllowed = 'move';
                     }}
                   >
-                    <EventChip ev={ev} showStaff onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX, y: e.clientY }); }} />
+                    <EventChip ev={ev} showStaff onDoubleClick={() => onEdit(ev)} onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX || 0, y: e.clientY || 0, currentTarget: e.currentTarget }); }} />
                   </div>
                 ))}
                 {dayEvents.length > 4 && (
@@ -133,7 +147,7 @@ export function AgendaView({
   events: DiaryEvent[];
   selectedIds: ReadonlySet<string>;
   onSelect: (id: string, e: React.MouseEvent) => void;
-  onOpen: (ev: DiaryEvent, anchor: { x: number; y: number }) => void;
+  onOpen: (ev: DiaryEvent, anchor: Anchor) => void;
   onOpenDay: (day: Date) => void;
 }) {
   const listed = days
@@ -161,7 +175,7 @@ export function AgendaView({
                   <button
                     key={ev.id}
                     type="button"
-                    onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX, y: e.clientY }); }}
+                    onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX || 0, y: e.clientY || 0, currentTarget: e.currentTarget }); }}
                     className={cn('flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-surface-hover', selectedIds.has(ev.id) && 'bg-brand-soft/40 ring-1 ring-inset ring-brand/40')}
                   >
                     <span className="w-28 shrink-0 text-xs font-bold tabular-nums text-ink">{fmtTimeRange(ev.start, ev.end)}</span>
@@ -197,7 +211,7 @@ export function ResourceTimeline({
   staff: StaffOption[];
   events: DiaryEvent[];
   onSelect: (id: string, e: React.MouseEvent) => void;
-  onOpen: (ev: DiaryEvent, anchor: { x: number; y: number }) => void;
+  onOpen: (ev: DiaryEvent, anchor: Anchor) => void;
   onOpenDay: (day: Date) => void;
 }) {
   const perStaff = new Map<string, DiaryEvent[]>();
@@ -226,7 +240,7 @@ export function ResourceTimeline({
             const list = (perStaff.get(s.id) ?? []).filter((e) => eventsOnDay([e], day).length > 0);
             return (
               <div key={startOfDay(day).getTime()} className="space-y-0.5 border-r border-line p-1 last:border-r-0">
-                {list.map((ev) => <EventChip key={ev.id} ev={ev} onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX, y: e.clientY }); }} />)}
+                {list.map((ev) => <EventChip key={ev.id} ev={ev} onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX || 0, y: e.clientY || 0, currentTarget: e.currentTarget }); }} />)}
               </div>
             );
           })}

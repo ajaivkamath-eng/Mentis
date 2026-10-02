@@ -36,6 +36,8 @@ interface Props {
   onEdit: (ev: DiaryEvent) => void;
   onMove: (ev: DiaryEvent, start: Date, end: Date, staffId: string) => void;
   onHeaderClick?: (day: Date) => void;
+  /** Prevents starting a visual drag for entries the current user cannot change. */
+  canDrag?: (ev: DiaryEvent) => boolean;
 }
 
 type Drag =
@@ -48,12 +50,13 @@ const MS_DAY = 86_400_000;
 
 export function TimeGrid({
   days, events, staffLanes, workingHours, slotMinutes, pxPerHour = 54,
-  selectedIds, clipboardIds, onSelect, onCreate, onOpen, onEdit, onMove, onHeaderClick,
+  selectedIds, clipboardIds, onSelect, onCreate, onOpen, onEdit, onMove, onHeaderClick, canDrag = () => true,
 }: Props) {
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
+  const suppressClickRef = useRef(false);
   dragRef.current = drag;
   const [now, setNow] = useState(() => new Date());
 
@@ -111,11 +114,12 @@ export function TimeGrid({
     if (e.button !== 0) return;
     e.preventDefault();
     const min = snapMin(yToMin(e.clientY));
-    setDrag({ kind: 'create', col, lane, anchorMin: min, curMin: min + slotMinutes, moved: false, startX: e.clientX, startY: e.clientY });
+    // A click creates a useful one-hour entry; dragging selects a custom range.
+    setDrag({ kind: 'create', col, lane, anchorMin: min, curMin: min + 60, moved: false, startX: e.clientX, startY: e.clientY });
   };
 
   const beginMove = (e: React.PointerEvent, ev: DiaryEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !canDrag(ev)) return;
     const s = new Date(ev.start);
     const evStartMin = Math.max(0, s.getHours() * 60 + s.getMinutes() - dayStartMin);
     setDrag({
@@ -129,7 +133,7 @@ export function TimeGrid({
   };
 
   const beginResize = (e: React.PointerEvent, ev: DiaryEvent, edge: 'start' | 'end') => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !canDrag(ev)) return;
     e.stopPropagation();
     const evStartMin = Math.max(0, new Date(ev.start).getHours() * 60 + new Date(ev.start).getMinutes() - dayStartMin);
     const evEndMin = Math.min(totalMin, new Date(ev.end).getHours() * 60 + new Date(ev.end).getMinutes() - dayStartMin);
@@ -164,14 +168,19 @@ export function TimeGrid({
       if (d.kind === 'create') {
         const staffId = staffLanes[d.lane]?.id;
         if (!staffId) return;
-        const a = Math.min(d.anchorMin, d.curMin - slotMinutes);
-        const b = Math.max(d.anchorMin + slotMinutes, d.curMin);
+        const endMin = d.moved ? d.curMin : d.anchorMin + 60;
+        const a = Math.min(d.anchorMin, endMin);
+        const b = Math.max(a + slotMinutes, Math.max(d.anchorMin, endMin));
         onCreate({ start: minToDate(d.col, a), end: minToDate(d.col, b), staffId, anchor: { x: e.clientX, y: e.clientY } });
       } else if (d.kind === 'move' && d.active) {
         const start = minToDate(d.col, d.curMin);
         const end = new Date(start.getTime() + d.durMin * MS_MIN);
+        suppressClickRef.current = true;
+        window.setTimeout(() => { suppressClickRef.current = false; }, 0);
         onMove(d.ev, start, end, staffLanes[d.lane]?.id || d.ev.staffId);
       } else if (d.kind === 'resize' && d.active) {
+        suppressClickRef.current = true;
+        window.setTimeout(() => { suppressClickRef.current = false; }, 0);
         const col = dayIndexOf(d.origStart);
         let startMs = d.origStart;
         let endMs = d.origEnd;
@@ -234,7 +243,6 @@ export function TimeGrid({
     () => days.map((day) => events.filter((e) => e.allDay && eventsOnDay([e], day).length > 0)),
     [days, events],
   );
-  const hasAllDay = allDayByDay.some((a) => a.length > 0);
 
   const dragGhost = (() => {
     if (!drag) return null;
@@ -312,23 +320,45 @@ export function TimeGrid({
         })}
       </div>
 
-      {/* All-day row */}
-      {hasAllDay && (
-        <div className="flex border-b border-line bg-surface-inset/40">
-          <div className="shrink-0 border-r border-line py-1 pr-1 text-right text-[9px] font-bold uppercase text-ink-faint" style={{ width: GUTTER_W }}>all day</div>
-          <div className="grid min-w-0 flex-1" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0,1fr))` }}>
-            {allDayByDay.map((list, i) => (
-              <div key={i} className="space-y-1 border-r border-line p-1 last:border-r-0">
-                {list.map((ev) => (
-                  <div key={ev.id} className="h-7">
-                    <EventBlock ev={ev} compact showStaff={multiStaff} selected={selectedIds.has(ev.id)} onClick={(e) => onSelect(ev.id, e)} onDoubleClick={() => onEdit(ev)} onPointerDown={(e) => e.stopPropagation()} />
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+      {/* All-day row is always present: it is both a label and a fast create target. */}
+      <div className="flex border-b border-line bg-surface-inset/40">
+        <div className="shrink-0 border-r border-line py-1 pr-1 text-right text-[9px] font-bold uppercase text-ink-faint" style={{ width: GUTTER_W }}>all day</div>
+        <div className="grid min-w-0 flex-1" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0,1fr))` }}>
+          {allDayByDay.map((list, i) => (
+            <div key={i} className="group/allday min-h-9 space-y-1 border-r border-line p-1 last:border-r-0">
+              {list.map((ev) => (
+                <div key={ev.id} className="h-7">
+                  <EventBlock
+                    ev={ev}
+                    compact
+                    showStaff={multiStaff}
+                    selected={selectedIds.has(ev.id)}
+                    onClick={(e) => { onSelect(ev.id, e); if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX || 0, y: e.clientY || 0, currentTarget: e.currentTarget }); }}
+                    onDoubleClick={() => onEdit(ev)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  />
+                </div>
+              ))}
+              <button
+                type="button"
+                aria-label={`Create all-day entry on ${days[i].toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}`}
+                title="Add all-day entry"
+                onClick={(e) => {
+                  const day = startOfDay(days[i]);
+                  const start = new Date(day);
+                  const end = new Date(day);
+                  end.setHours(23, 59, 0, 0);
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  onCreate({ start, end, staffId: staffLanes[0]?.id ?? '', anchor: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } });
+                }}
+                className="flex min-h-6 w-full items-center justify-center gap-1 rounded px-1 text-[10px] font-semibold text-ink-faint transition-colors hover:bg-brand-soft hover:text-brand-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              >
+                <span aria-hidden>+</span><span className="sr-only">Add all-day entry</span>
+              </button>
+            </div>
+          ))}
         </div>
-      )}
+      </div>
 
       {/* Scrolling body */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -359,8 +389,12 @@ export function TimeGrid({
               return (
                 <div
                   key={idx}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Create a one-hour diary entry on ${day.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${fmtTime(minToDate(col, Math.max(0, Math.min(totalMin - 60, (9 * 60) - dayStartMin))).toISOString())}`}
+                  title="Click or drag to create a diary entry · keyboard: Enter for a one-hour entry at 09:00"
                   className={cn(
-                    'relative cursor-cell border-b border-line',
+                    'group/slot relative cursor-cell border-b border-line outline-none transition-colors hover:bg-brand-soft/20 focus-visible:z-20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]',
                     lane < lanes - 1 && multiStaff ? 'border-r border-r-line/50' : 'border-r-2 border-r-line',
                     weekend && 'bg-surface-inset/40',
                     isToday && 'bg-brand-soft/20',
@@ -369,7 +403,18 @@ export function TimeGrid({
                     backgroundImage: `repeating-linear-gradient(to bottom, var(--border) 0 1px, transparent 1px ${(slotMinutes / 60) * pxPerHour}px)`,
                   }}
                   onPointerDown={(e) => beginCreate(e, col, lane)}
-                />
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    const min = Math.max(0, Math.min(totalMin - 60, (9 * 60) - dayStartMin));
+                    const start = minToDate(col, min);
+                    const end = new Date(start.getTime() + 60 * MS_MIN);
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    onCreate({ start, end, staffId: staffLanes[lane]?.id ?? '', anchor: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } });
+                  }}
+                >
+                  <span aria-hidden className="pointer-events-none absolute right-2 top-2 grid size-5 place-items-center rounded-md bg-surface-raised text-brand-text opacity-0 shadow-sm transition-opacity group-hover/slot:opacity-100 group-focus-visible/slot:opacity-100">+</span>
+                </div>
               );
             })}
 
@@ -402,8 +447,9 @@ export function TimeGrid({
                         showStaff={multiStaff}
                         selected={selectedIds.has(ev.id)}
                         onClick={(e) => {
+                          if (suppressClickRef.current) { e.preventDefault(); return; }
                           onSelect(ev.id, e);
-                          if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX, y: e.clientY });
+                          if (!(e.ctrlKey || e.metaKey)) onOpen(ev, { x: e.clientX || 0, y: e.clientY || 0, currentTarget: e.currentTarget });
                         }}
                         onDoubleClick={() => onEdit(ev)}
                         onPointerDown={(e) => beginMove(e, ev)}

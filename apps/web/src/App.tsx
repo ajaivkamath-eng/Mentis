@@ -13,9 +13,9 @@ import { Venues, Groups, RateCards, Holidays, Overrides, ActionTimelines, Device
 import { Importer } from './pages/importer';
 import { MemberForm, CustomerForm, Enrolments, CoachProfile } from './pages/people';
 import { Staffing, SessionClose } from './pages/staffing';
-import { Availability } from './pages/availability';
+import { DiaryWorkspace } from './pages/diary';
 import { ActionCreate } from './pages/actions';
-import { DiaryCalendar } from './pages/diarycal';
+
 import { BookingSlots, Bookings } from './pages/bookings';
 import { ProgressReports, CoachPerformance, SparringMatcher, AutoSuggest } from './pages/growth';
 import { VenueDashboard, MemberSessions, IcsExport } from './pages/dashboards';
@@ -85,10 +85,10 @@ export default function App() {
             <Route path="/templates" element={P('sessions.manage', <SessionTemplates />)} />
             <Route path="/overrides" element={P('sessions.manage', <Overrides />)} />
             <Route path="/holidays" element={P('sessions.manage', <Holidays />)} />
-            <Route path="/diary-manage" element={P('diary.manage', <DiaryCalendar />)} />
+            <Route path="/diary-manage" element={P('diary.manage', <DiaryWorkspace />)} />
             <Route path="/staffing" element={P('staffing.manage', <Staffing />)} />
             <Route path="/closeout" element={P('staffing.manage', <SessionClose />)} />
-            <Route path="/availability" element={P('availability.recordSelf', <Availability />)} />
+            <Route path="/availability" element={P('availability.recordSelf', <DiaryWorkspace />)} />
             <Route path="/tasks" element={P('tasks.viewOwn', <Tasks />)} />
             <Route path="/inbox" element={P('actions.closeOwn', <Inbox />)} />
             <Route path="/actions/new" element={P('actions.createManual', <ActionCreate />)} />

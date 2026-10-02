@@ -332,7 +332,7 @@ export function QuickCreatePopover({
 /* ------------------------------------------------------------------ */
 
 export function EventDetailsPopover({
-  anchor, ev, onClose, onEdit, onDuplicate, onDelete, onCopy, onCut, onOpenLink, multiStaff,
+  anchor, ev, onClose, onEdit, onDuplicate, onDelete, onCopy, onCut, onOpenLink, onMoveToDateTime, onEditPattern, canEdit, canMove, multiStaff,
 }: {
   anchor: Anchor;
   ev: DiaryEvent;
@@ -343,13 +343,17 @@ export function EventDetailsPopover({
   onCopy: () => void;
   onCut?: () => void;
   onOpenLink?: () => void;
+  onMoveToDateTime?: () => void;
+  onEditPattern?: () => void;
+  canEdit?: boolean;
+  canMove?: boolean;
   multiStaff?: boolean;
 }) {
   const style = kindStyle(ev);
   const Icon = style.icon;
-  // Planner-generated occurrences are individually editable (exceptions);
-  // session/task bookings are system-owned and read-only in the diary.
-  const editable = !ev.system || ev.sourceType === 'planner';
+  // Planner-generated occurrences are individually editable as exceptions;
+  // system bookings remain owned by their source scheduler.
+  const editable = canEdit ?? (!ev.system || ev.sourceType === 'planner');
   return (
     <FloatingCard anchor={anchor} width={300} label="Entry details" onClose={onClose}>
       <div className="mb-1 flex items-center gap-2 pr-4">
@@ -360,13 +364,16 @@ export function EventDetailsPopover({
         </div>
       </div>
       <dl className="mb-2 space-y-1 text-[11px] text-ink-muted">
-        <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">When</dt><dd>{fmtTimeRange(ev.start, ev.end)}</dd></div>
-        {ev.staffName && <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Coach</dt><dd>{ev.staffName}</dd></div>}
+        <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">When</dt><dd>{new Date(ev.start).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · {ev.allDay ? 'All day' : fmtTimeRange(ev.start, ev.end)}</dd></div>
+        {ev.staffName && <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Staff</dt><dd>{ev.staffName}</dd></div>}
         {ev.coachRole && <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Role</dt><dd>{ROLE_LABEL[ev.coachRole]}</dd></div>}
         {ev.location && <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Venue</dt><dd>{ev.location}</dd></div>}
         {ev.notes && <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Notes</dt><dd className="italic">{ev.notes}</dd></div>}
-        <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Source</dt><dd>{SOURCE_LABEL[ev.sourceType]}{ev.system ? ' · system' : ''}</dd></div>
+        <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Source</dt><dd>{SOURCE_LABEL[ev.sourceType]}{ev.system ? ' · system-generated' : ''}</dd></div>
         <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Access</dt><dd>{editable ? 'Editable by you' : 'Read-only in diary'}</dd></div>
+        {(ev.conflictStatus === 'open' || ev.conflictStatus === 'acknowledged') && (
+          <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Status</dt><dd><Badge tone={ev.conflictStatus === 'acknowledged' ? 'warning' : 'danger'} size="sm" icon={<AlertTriangle />}>{ev.conflictStatus === 'acknowledged' ? 'Acknowledged conflict' : 'Conflict needs review'}</Badge></dd></div>
+        )}
         {ev.chargeable && (
           <div className="flex gap-1"><dt className="w-14 shrink-0 font-bold">Charges</dt>
             <dd><Badge tone="success" size="sm">chargeable · {ev.rateLabel ?? 'rate'} {fmtMoney(ev.rateCents)}/h</Badge></dd>
@@ -374,8 +381,10 @@ export function EventDetailsPopover({
         )}
       </dl>
       <div className="flex flex-wrap gap-1.5">
-        {ev.linkTo && <Button intent="secondary" size="sm" onClick={onOpenLink}><Link2 className="size-3.5" />Open</Button>}
+        {(ev.linkTo || ev.sourceType === 'session' || ev.sourceType === 'task') && onOpenLink && <Button intent="secondary" size="sm" onClick={onOpenLink}><Link2 className="size-3.5" />Open {ev.sourceType === 'session' ? 'session' : 'task'}</Button>}
         {editable && <Button intent="primary" size="sm" onClick={onEdit}><Pencil className="size-3.5" />Edit</Button>}
+        {canMove && onMoveToDateTime && <Button intent="secondary" size="sm" onClick={onMoveToDateTime}><CalendarClock className="size-3.5" />Move to date &amp; time</Button>}
+        {ev.sourceType === 'planner' && ev.ruleId && onEditPattern && <Button intent="secondary" size="sm" onClick={onEditPattern}><Repeat className="size-3.5" />Edit pattern</Button>}
         {editable && <Button intent="secondary" size="sm" onClick={onDuplicate}><Copy className="size-3.5" />Duplicate</Button>}
         <Button intent="secondary" size="sm" onClick={onCopy}><Copy className="size-3.5" />Copy</Button>
         {editable && onCut && <Button intent="secondary" size="sm" onClick={onCut}><Scissors className="size-3.5" />Cut</Button>}
