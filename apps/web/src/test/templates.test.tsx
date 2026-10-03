@@ -104,7 +104,7 @@ describe('program blueprints page', () => {
     expect(within(instances).getAllByText(/field\(s\) off blueprint/).length).toBeGreaterThan(0);
     expect(within(instances).getAllByRole('button', { name: /re-apply/i }).length).toBeGreaterThan(0);
     // …and the series warns that it carries edited occurrences.
-    const series = screen.getByRole('heading', { name: 'Sessions' }).closest('.card') as HTMLElement;
+    const series = screen.getByRole('heading', { name: 'Program Runs (Pipelines)' }).closest('.card') as HTMLElement;
     expect(within(series).getAllByText('1 edited').length).toBeGreaterThan(0);
   });
 
@@ -112,7 +112,7 @@ describe('program blueprints page', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const seriesCard = screen.getByRole('heading', { name: 'Sessions' }).closest('.card') as HTMLElement;
+    const seriesCard = screen.getByRole('heading', { name: 'Program Runs (Pipelines)' }).closest('.card') as HTMLElement;
     const deleteButtons = await within(seriesCard).findAllByRole('button', { name: /delete/i });
     await user.click(deleteButtons[0]);
 

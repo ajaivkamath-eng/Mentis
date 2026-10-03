@@ -55,6 +55,23 @@ export interface DemoMemberSummary {
   alert?: string;
 }
 
+export interface DemoConsent {
+  kind: string;
+  label?: string;
+  state?: 'not-recorded' | 'granted' | 'withdrawn' | 'notGranted';
+  issuedAt?: string | null;
+  validUntil?: string | null;
+  granted: boolean;
+}
+
+export interface DemoCharge {
+  id: string;
+  amountCents: number;
+  status: 'pendingApproval' | 'approved' | 'recovered' | 'outstandingDebit';
+  dueDate?: string | null;
+  createdAt: string;
+}
+
 export interface DemoCustomer {
   id: string;
   name: string;
@@ -68,7 +85,10 @@ export interface DemoCustomer {
   memberIds: string[];
   lastContact: string;
   balanceCents: number;
+  charges?: DemoCharge[];
   consentLabels: string[];
+  consents?: DemoConsent[];
+  isAlsoMemberId?: string | null;
   activity: DemoActivity[];
 }
 
@@ -78,6 +98,9 @@ export interface DemoMember extends DemoMemberSummary {
   handedness: 'L' | 'R' | null;
   playingStyle: string | null;
   equipmentNotes: string | null;
+  sport?: string | null;
+  photoRef?: string | null;
+  tags?: string[];
   specialNeedsFlag: boolean;
   createdAt: string;
   attendance: DemoAttendance[];
@@ -102,8 +125,13 @@ const customerSeed: DemoCustomer[] = [
     lastContact: '2026-09-16',
     balanceCents: 0,
     consentLabels: ['Photography', 'Email updates'],
+    consents: [
+      { kind: 'photo', label: 'Photography & video', state: 'granted', issuedAt: '2025-01-10', validUntil: '2026-12-31', granted: true },
+      { kind: 'marketing', label: 'Club / programme updates', state: 'granted', issuedAt: '2024-08-01', validUntil: '2026-01-01', granted: true },
+    ],
+    charges: [{ id: 'demo-charge-sarah-recovered', amountCents: 1200, status: 'recovered', dueDate: null, createdAt: '2026-09-16' }],
     activity: [
-      { id: 'sarah-1', title: 'Payment received', detail: 'September membership · £84.00', date: '2026-09-16', tone: 'success' },
+      { id: 'sarah-1', title: 'Session charge recovered', detail: 'Junior development · £12.00', date: '2026-09-16', tone: 'success' },
       { id: 'sarah-2', title: 'Coach note shared', detail: 'Ava’s backhand block is progressing well', date: '2026-09-12', tone: 'brand' },
       { id: 'sarah-3', title: 'Booking confirmed', detail: 'Family review with Coach Jack', date: '2026-09-05', tone: 'info' },
     ],
@@ -121,9 +149,10 @@ const customerSeed: DemoCustomer[] = [
     memberIds: ['demo-member-noah'],
     lastContact: '2026-09-10',
     balanceCents: 1200,
+    charges: [{ id: 'demo-charge-daniel-outstanding', amountCents: 1200, status: 'outstandingDebit', dueDate: '2026-09-30', createdAt: '2026-09-15' }],
     consentLabels: ['Email updates'],
     activity: [
-      { id: 'daniel-1', title: 'Payment needs review', detail: 'August make-up session · £12.00 outstanding', date: '2026-09-15', tone: 'warning' },
+      { id: 'daniel-1', title: 'Session charge needs review', detail: 'Make-up session · £12.00 outstanding debit', date: '2026-09-15', tone: 'warning' },
       { id: 'daniel-2', title: 'Absence reported', detail: 'Noah missed Tuesday development group', date: '2026-09-09', tone: 'danger' },
       { id: 'daniel-3', title: 'Email sent', detail: 'Attendance check-in', date: '2026-09-10', tone: 'info' },
     ],
@@ -200,7 +229,7 @@ const customerSeed: DemoCustomer[] = [
     balanceCents: 0,
     consentLabels: ['Email updates'],
     activity: [
-      { id: 'emma-1', title: 'Membership paused', detail: 'Paused until 30 September', date: '2026-08-28', tone: 'warning' },
+      { id: 'emma-1', title: 'Programme participation paused', detail: 'Review scheduled for 30 September', date: '2026-08-28', tone: 'warning' },
     ],
   },
 ];
@@ -441,12 +470,12 @@ const memberSeed: DemoMember[] = [
     equipmentNotes: null,
     specialNeedsFlag: false,
     createdAt: '2024-04-11',
-    alert: 'Membership paused until 30 September',
+    alert: 'Programme participation paused until 30 September',
     attendance: [{ id: 'luca-a1', date: '2026-08-27', session: 'Junior development', venue: 'Woodley Club', coach: 'Jack', status: 'present' }],
     goals: [],
     matches: [],
     feedback: [],
-    timeline: [{ id: 'luca-t1', title: 'Membership paused', detail: 'Review on 30 September', date: '2026-08-28', tone: 'warning' }],
+    timeline: [{ id: 'luca-t1', title: 'Programme participation paused', detail: 'Review on 30 September', date: '2026-08-28', tone: 'warning' }],
   },
 ];
 
@@ -482,11 +511,15 @@ function saveLocalPeople(value: LocalPeople) {
 }
 
 export function demoMembersSnapshot() {
-  return [...DEMO_MEMBERS, ...localPeople().members];
+  const merged = new Map(DEMO_MEMBERS.map((member) => [member.id, member]));
+  for (const member of localPeople().members) merged.set(member.id, member);
+  return [...merged.values()];
 }
 
 export function demoCustomersSnapshot() {
-  return [...DEMO_CUSTOMERS, ...localPeople().customers];
+  const merged = new Map(DEMO_CUSTOMERS.map((customer) => [customer.id, customer]));
+  for (const customer of localPeople().customers) merged.set(customer.id, customer);
+  return [...merged.values()];
 }
 
 export function demoMemberById(id: string | undefined) {
@@ -501,7 +534,7 @@ export function demoMembersForCustomer(customerId: string) {
   return demoMembersSnapshot().filter((member) => member.customerId === customerId);
 }
 
-export function addDemoCustomer(input: { name: string; phone?: string; email?: string; guardianA?: string; guardianB?: string; nokName?: string; nokPhone?: string }) {
+export function addDemoCustomer(input: { name: string; phone?: string; email?: string; guardianA?: string; guardianB?: string; nokName?: string; nokPhone?: string; consents?: DemoConsent[] }) {
   const now = new Date().toISOString();
   const customer: DemoCustomer = {
     id: `demo-customer-local-${Date.now()}`,
@@ -516,7 +549,9 @@ export function addDemoCustomer(input: { name: string; phone?: string; email?: s
     memberIds: [],
     lastContact: now,
     balanceCents: 0,
-    consentLabels: [],
+    charges: [],
+    consentLabels: (input.consents ?? []).filter((consent) => consent.granted).map((consent) => consent.label ?? consent.kind),
+    consents: input.consents ?? [],
     activity: [{ id: `customer-created-${Date.now()}`, title: 'Customer created', detail: 'Added from the people workspace', date: now, tone: 'brand' }],
   };
   const stored = localPeople();
@@ -525,7 +560,7 @@ export function addDemoCustomer(input: { name: string; phone?: string; email?: s
   return customer;
 }
 
-export function addDemoMember(input: { name: string; dateOfBirth: string; customerId?: string; tteNumber?: string; handedness?: 'L' | 'R'; playingStyle?: string; equipmentNotes?: string }) {
+export function addDemoMember(input: { name: string; dateOfBirth: string; customerId?: string; tteNumber?: string; handedness?: 'L' | 'R'; playingStyle?: string; equipmentNotes?: string; sport?: string; photoRef?: string; tags?: string[] }) {
   const now = new Date().toISOString();
   const customer = input.customerId ? demoCustomerById(input.customerId) : null;
   const member: DemoMember = {
@@ -545,6 +580,9 @@ export function addDemoMember(input: { name: string; dateOfBirth: string; custom
     handedness: input.handedness ?? null,
     playingStyle: input.playingStyle || null,
     equipmentNotes: input.equipmentNotes || null,
+    sport: input.sport || null,
+    photoRef: input.photoRef || null,
+    tags: input.tags ?? [],
     specialNeedsFlag: false,
     createdAt: now,
     attendance: [],
@@ -557,4 +595,43 @@ export function addDemoMember(input: { name: string; dateOfBirth: string; custom
   stored.members.push(member);
   saveLocalPeople(stored);
   return member;
+}
+
+
+export function updateDemoMember(id: string, patch: Partial<DemoMember>) {
+  const current = demoMemberById(id);
+  if (!current) return null;
+  const next = { ...current, ...patch };
+  const stored = localPeople();
+  const index = stored.members.findIndex((member) => member.id === id);
+  if (index === -1) stored.members.push(next);
+  else stored.members[index] = next;
+  saveLocalPeople(stored);
+  return next;
+}
+
+export function updateDemoCustomer(id: string, patch: Partial<DemoCustomer>) {
+  const current = demoCustomerById(id);
+  if (!current) return null;
+  const next = { ...current, ...patch };
+  const stored = localPeople();
+  const index = stored.customers.findIndex((customer) => customer.id === id);
+  if (index === -1) stored.customers.push(next);
+  else stored.customers[index] = next;
+  saveLocalPeople(stored);
+  return next;
+}
+
+export function linkDemoMembersToCustomer(customerId: string, memberIds: string[]) {
+  const customer = demoCustomerById(customerId);
+  if (!customer) return null;
+  for (const memberId of memberIds) {
+    const member = demoMemberById(memberId);
+    if (member) updateDemoMember(memberId, { customerId, customerName: customer.name });
+  }
+  const members = demoMembersSnapshot();
+  return updateDemoCustomer(customerId, {
+    memberIds: members.filter((member) => member.customerId === customerId).map((member) => member.id),
+    lastContact: new Date().toISOString(),
+  });
 }

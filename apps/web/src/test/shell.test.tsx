@@ -102,7 +102,7 @@ describe('AppShell', () => {
 
     // Grouped nav: headings are buttons so they can collapse.
     expect(screen.getAllByRole('button', { name: /Coaching/i }).length).toBeGreaterThan(0);
-    expect(screen.getByRole('link', { name: /Members/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /People workspace/ })).toBeInTheDocument();
     expect(screen.getByText('Ava Kamath')).toBeInTheDocument();
     expect(screen.getByText('Page content')).toBeInTheDocument();
   });

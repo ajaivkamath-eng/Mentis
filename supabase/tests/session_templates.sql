@@ -258,10 +258,16 @@ select mentis_tmpl_ok('the fixture holiday window is in place',
 do $$
 declare
   v_result jsonb;
+  v_group uuid := 'f1000000-0000-0000-0000-000000000001';
+  v_start date := (select (value #>> '{}')::date from tpl_results where key = 'start');
 begin
   perform mentis_tmpl_set_uid('a1000000-0000-0000-0000-000000000001');
+  insert into mentis_batch_groupings (id, organization_id, name, code, start_date, end_date, status)
+  values (v_group, mentis_tmpl_uuid('org'), 'BP Test Season', 'BP-TEST', v_start, v_start + 14, 'active')
+  on conflict (id) do nothing;
+  insert into tpl_results values ('grouping', to_jsonb(v_group)) on conflict (key) do update set value = excluded.value;
 
-  v_result := instantiate_session_series(
+  v_result := instantiate_grouped_session_series(
     mentis_tmpl_uuid('template'),
     jsonb_build_object(
       'frequency', 'weekly',
@@ -275,9 +281,24 @@ begin
       'skip_term_holidays', true,
       'skip_bank_holidays', true
     ),
-    jsonb_build_object('label', 'BP Autumn Mondays', 'created_by', 'a1000000-0000-0000-0000-000000000001')
+    jsonb_build_object(
+      'label', 'BP Autumn Mondays',
+      'created_by', 'a1000000-0000-0000-0000-000000000001',
+      'batch_grouping_id', v_group
+    )
   );
   insert into tpl_results values ('seed', v_result), ('series', to_jsonb(v_result->>'series_id'));
+end $$;
+
+do $$
+begin
+  perform mentis_tmpl_must_fail(
+    'a program run cannot be generated without an explicit batch grouping',
+    format(
+      'select instantiate_grouped_session_series(%L::uuid, %L::jsonb, %L::jsonb)',
+      mentis_tmpl_uuid('template'), '{}'::jsonb::text, '{}'::jsonb::text
+    )
+  );
 end $$;
 
 select mentis_tmpl_ok('the first three Mondays are materialised',
@@ -286,6 +307,17 @@ select mentis_tmpl_ok('the first three Mondays are materialised',
 select mentis_tmpl_ok('the series exists and is active',
   (select value->>'series_id' is not null from tpl_results where key = 'seed')
   and exists (select 1 from mentis_session_series where id = mentis_tmpl_uuid('series') and status = 'active'));
+select mentis_tmpl_ok('the ProgramRun and recurrence pattern retain the selected BatchGrouping',
+  exists (
+    select 1 from mentis_session_series s
+    join mentis_recurrence_rules r on r.id = s.recurrence_rule_id
+    where s.id = mentis_tmpl_uuid('series')
+      and s.batch_grouping_id = mentis_tmpl_uuid('grouping')
+      and r.batch_grouping_id = mentis_tmpl_uuid('grouping')
+  ));
+select mentis_tmpl_ok('all generated sessions inherit their ProgramRun BatchGrouping',
+  (select count(*) = 3 and bool_and(batch_grouping_id = mentis_tmpl_uuid('grouping'))
+     from mentis_sessions where series_id = mentis_tmpl_uuid('series')));
 select mentis_tmpl_ok('every instance points at both the blueprint and the series',
   (select count(*) = 3 from mentis_session_occurrences
     where series_id = mentis_tmpl_uuid('series')

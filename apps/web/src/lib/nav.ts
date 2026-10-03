@@ -96,7 +96,8 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'people',
     label: 'People',
     items: [
-      { to: '/members', label: 'Members', icon: Users, perm: 'customers.view', primary: true, keywords: 'players athletes' },
+      { to: '/people', label: 'People workspace', icon: Users, perm: 'customers.view', primary: true, keywords: 'members customers players athletes households' },
+      { to: '/members', label: 'Members', icon: Users, perm: 'customers.view', keywords: 'players athletes roster' },
       { to: '/customers', label: 'Customers', icon: Building2, perm: 'customers.view', keywords: 'payer account guardian' },
       { to: '/enrolments', label: 'Enrolments', icon: UserPlus, perm: 'sessions.manage', keywords: 'join class' },
       { to: '/tasters', label: 'Tasters', icon: Sparkles, perm: 'tasters.manage', keywords: 'prospects leads funnel' },

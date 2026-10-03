@@ -14,6 +14,10 @@ type Tone = NonNullable<BadgeProps['tone']>;
 const STATUS_TONES: Record<string, Tone> = {
   /* lifecycle */
   active: 'success',
+  atrisk: 'warning',
+  attention: 'warning',
+  expired: 'danger',
+  notrecorded: 'warning',
   enabled: 'success',
   approved: 'success',
   published: 'success',
@@ -38,7 +42,7 @@ const STATUS_TONES: Record<string, Tone> = {
   provisional: 'warning',
   draft: 'neutral',
   new: 'info',
-  paused: 'neutral',
+  paused: 'info',
   inactive: 'neutral',
   archived: 'neutral',
   closed: 'neutral',
@@ -91,3 +95,6 @@ export function StatusBadge({ status, label, dot = true, ...props }: StatusBadge
     </Badge>
   );
 }
+
+/** Domain-facing name used in member/customer workflows. */
+export const StatusChip = StatusBadge;

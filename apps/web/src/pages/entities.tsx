@@ -10,6 +10,7 @@ import {
   Check,
   CheckCircle2,
   CircleDollarSign,
+  CircleX,
   Clock3,
   Download,
   Filter,
@@ -20,6 +21,7 @@ import {
   MessageCircle,
   NotebookPen,
   Phone,
+  PauseCircle,
   Plus,
   ReceiptText,
   RefreshCw,
@@ -39,6 +41,7 @@ import { supabase, functionsUrl } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { demoCustomerById, demoMemberById, demoMembersForCustomer, demoCustomersSnapshot, demoMembersSnapshot, DEMO_MEMBERS, type DemoAttendance, type DemoCustomer, type DemoGoal, type DemoMatch } from '../lib/people-data';
 import { demoEnabled, isDemoSession } from '../lib/demo';
+import { localDateKey } from '../lib/format';
 import { PageHeader, SectionHeader } from '../components/patterns/page-header';
 import {
   Avatar,
@@ -57,6 +60,7 @@ import {
   SkeletonTable,
   StatCard,
   StatGrid,
+  StatusChip,
 } from '../components/ui';
 import { csvOf, TAG_TYPE_DEFINITIONS } from '@mentis/core';
 
@@ -64,7 +68,7 @@ import { csvOf, TAG_TYPE_DEFINITIONS } from '@mentis/core';
  * People model helpers
  * -------------------------------------------------------------------------- */
 
-type PersonStatus = 'active' | 'atRisk' | 'inactive';
+type PersonStatus = 'active' | 'paused' | 'atRisk' | 'inactive';
 type FilterValue = 'all' | 'active' | 'attention' | 'inactive';
 
 type BadgeTone = 'neutral' | 'brand' | 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'outline';
@@ -87,6 +91,7 @@ interface MemberRow {
   lastAttended: string | null;
   nextSession: string | null;
   groups: string[];
+  tags: string[];
   handedness: 'L' | 'R' | null;
   playingStyle: string | null;
   equipmentNotes: string | null;
@@ -106,10 +111,40 @@ interface CustomerRow {
   nokPhone: string | null;
   status: 'active' | 'attention' | 'inactive';
   members: MemberRow[];
+  consents: ConsentRecord[];
+  charges: CustomerCharge[];
   lastContact: string | null;
   balanceCents: number;
   consentLabels: string[];
   createdAt: string | null;
+}
+
+interface ConsentRecord {
+  id: string;
+  kind: string;
+  label: string;
+  status: 'granted' | 'withdrawn' | 'notRecorded' | 'expired';
+  issuedAt: string | null;
+  validUntil: string | null;
+}
+
+interface CustomerCharge {
+  id: string;
+  amountCents: number;
+  status: 'pendingApproval' | 'approved' | 'recovered' | 'outstandingDebit';
+  dueDate: string | null;
+  createdAt: string | null;
+}
+
+interface MemberEnrollment {
+  id: string;
+  name: string;
+  status: string;
+  expected: boolean;
+  startsAt: string | null;
+  validFrom: string | null;
+  validTo: string | null;
+  venue: string | null;
 }
 
 interface ActivityItem {
@@ -123,12 +158,12 @@ interface ActivityItem {
 interface MemberProfile {
   member: MemberRow;
   attendance: DemoAttendance[];
+  enrollments: MemberEnrollment[];
   goals: DemoGoal[];
   matches: DemoMatch[];
   feedback: { id: string; date: string; body: string; coach: string }[];
   timeline: ActivityItem[];
   rankings: { platform: string; value: number; asOf: string }[];
-  medicalNote?: string | null;
 }
 
 interface CustomerProfile {
@@ -177,15 +212,11 @@ function ageFromDob(value: string | null | undefined) {
 }
 
 function statusLabel(status: PersonStatus | CustomerRow['status']) {
-  if (status === 'atRisk' || status === 'attention') return 'Needs attention';
+  if (status === 'atRisk') return 'At Risk';
+  if (status === 'attention') return 'Needs attention';
   if (status === 'inactive') return 'Inactive';
+  if (status === 'paused') return 'Paused';
   return 'Active';
-}
-
-function statusTone(status: PersonStatus | CustomerRow['status']): BadgeTone {
-  if (status === 'atRisk' || status === 'attention') return 'warning';
-  if (status === 'inactive') return 'neutral';
-  return 'success';
 }
 
 function resultTone(result: string): BadgeTone {
@@ -214,6 +245,7 @@ function memberFromDemo(member: (typeof DEMO_MEMBERS)[number]): MemberRow {
     lastAttended: member.lastAttended,
     nextSession: member.nextSession,
     groups: member.groups,
+    tags: member.tags ?? [],
     handedness: member.handedness,
     playingStyle: member.playingStyle,
     equipmentNotes: member.equipmentNotes,
@@ -223,7 +255,7 @@ function memberFromDemo(member: (typeof DEMO_MEMBERS)[number]): MemberRow {
   };
 }
 
-function memberFromRaw(row: any, stats?: { attendance?: any[]; enrollments?: any[] }): MemberRow {
+function memberFromRaw(row: any, stats?: { attendance?: any[]; enrollments?: any[]; tags?: string[] }): MemberRow {
   const customer = firstRelation(row.mentis_customers ?? row.customers);
   const attendance = stats?.attendance ?? [];
   const attended = attendance.filter((item: any) => item.status === 'present' || item.status === 'late');
@@ -234,7 +266,7 @@ function memberFromRaw(row: any, stats?: { attendance?: any[]; enrollments?: any
     .map((item: any) => firstRelation(item.mentis_session_occurrences ?? item.sessions))
     .filter((session: any) => session?.start_at && new Date(session.start_at).getTime() >= Date.now())
     .sort((a: any, b: any) => String(a.start_at).localeCompare(String(b.start_at)))[0];
-  const alert = row.special_needs_flag ? 'Support note on file' : attendancePct > 0 && attendancePct < 70 ? 'Attendance needs attention' : undefined;
+  const alert = attendancePct > 0 && attendancePct < 70 ? 'Attendance needs attention' : undefined;
   return {
     id: row.id,
     name: row.name,
@@ -246,13 +278,14 @@ function memberFromRaw(row: any, stats?: { attendance?: any[]; enrollments?: any
     customerEmail: customer?.email ?? null,
     customerNokName: customer?.nok_name ?? null,
     customerNokPhone: customer?.nok_phone ?? null,
-    status: row.erased_at ? 'inactive' : alert || (attendancePct > 0 && attendancePct < 70) ? 'atRisk' : 'active',
+    status: row.erased_at ? 'inactive' : attendancePct > 0 && attendancePct < 70 ? 'atRisk' : 'active',
     attendancePct,
     sessionsAttended: attended.length,
     sessionsTotal: attendance.length,
     lastAttended: sortedAttendance.find((item: any) => item.status === 'present' || item.status === 'late')?.recorded_at ?? null,
     nextSession: nextEnrollment?.start_at ?? null,
     groups: [],
+    tags: stats?.tags ?? [],
     handedness: row.handedness ?? null,
     playingStyle: row.playing_style ?? null,
     equipmentNotes: row.equipment_notes ?? null,
@@ -266,7 +299,52 @@ function memberRowsForCustomer(rawMembers: any[], attendanceByMember = new Map<s
   return rawMembers.map((member) => memberFromRaw(member, { attendance: attendanceByMember.get(member.id) ?? [] }));
 }
 
-function customerFromDemo(customer: DemoCustomer): CustomerRow {
+const consentNameByKind: Record<string, string> = {
+  photo: 'Photography & video', photography: 'Photography & video',
+  marketing: 'Club / programme updates', updates: 'Club / programme updates',
+  data: 'Data sharing with programme partners', data_sharing: 'Data sharing with programme partners',
+  medical: 'Health information processing', health: 'Health information processing',
+};
+
+function normalizeConsents(value: any): ConsentRecord[] {
+  if (!Array.isArray(value)) return [];
+  const today = localDateKey();
+  return value.map((item: any, index: number) => {
+    const isLegacy = typeof item === 'string';
+    const kind = isLegacy ? item : String(item?.kind ?? item?.code ?? item?.type ?? 'unknown');
+    const label = isLegacy ? item : String(item?.label ?? consentNameByKind[kind.toLowerCase()] ?? item?.name ?? kind);
+    const issuedAt = isLegacy ? null : item?.issuedAt ?? item?.issued_at ?? item?.createdAt ?? null;
+    const validUntil = isLegacy ? null : item?.validUntil ?? item?.valid_until ?? item?.expiresAt ?? item?.expires_at ?? null;
+    const rawState = isLegacy ? '' : String(item?.state ?? item?.status ?? '').toLowerCase();
+    const granted = !isLegacy && (item?.granted === true || rawState === 'granted' || rawState === 'active');
+    const expired = !isLegacy && (rawState === 'expired' || rawState === 'lapsed' || item?.expired === true
+      || Boolean(validUntil && String(validUntil).slice(0, 10) < today && granted));
+    const status: ConsentRecord['status'] = rawState === 'withdrawn' || rawState === 'revoked' ? 'withdrawn'
+      : expired ? 'expired'
+        : granted ? 'granted'
+          : 'notRecorded';
+    return { id: isLegacy ? `legacy-${index}-${kind}` : String(item?.id ?? `${kind}-${index}`), kind, label, status, issuedAt: issuedAt ? String(issuedAt) : null, validUntil: validUntil ? String(validUntil) : null };
+  });
+}
+
+function normalizeCharge(value: any): CustomerCharge {
+  const allowed: CustomerCharge['status'][] = ['pendingApproval', 'approved', 'recovered', 'outstandingDebit'];
+  return {
+    id: String(value?.id ?? `charge-${Math.random().toString(36).slice(2)}`),
+    amountCents: Number(value?.amountCents ?? value?.amount_cents ?? 0),
+    status: allowed.includes(value?.status) ? value.status : 'pendingApproval',
+    dueDate: value?.dueDate ?? value?.due_date ?? null,
+    createdAt: value?.createdAt ?? value?.created_at ?? null,
+  };
+}
+
+function balanceForCharges(charges: CustomerCharge[]) {
+  return charges.filter((charge) => charge.status === 'outstandingDebit').reduce((sum, charge) => sum + charge.amountCents, 0);
+}
+
+function customerFromDemo(customer: DemoCustomer, includeFinance = true): CustomerRow {
+  const charges = includeFinance ? (customer.charges ?? []).map(normalizeCharge) : [];
+  const consentRows = normalizeConsents(customer.consents ?? customer.consentLabels);
   return {
     id: customer.id,
     name: customer.name,
@@ -276,24 +354,22 @@ function customerFromDemo(customer: DemoCustomer): CustomerRow {
     guardianB: customer.guardianB,
     nokName: customer.nokName,
     nokPhone: customer.nokPhone,
-    status: customer.status,
+    status: includeFinance ? customer.status : customer.status === 'inactive' ? 'inactive' : 'active',
     members: demoMembersForCustomer(customer.id).map(memberFromDemo),
     lastContact: customer.lastContact,
-    balanceCents: customer.balanceCents,
-    consentLabels: customer.consentLabels,
+    charges,
+    balanceCents: includeFinance ? (customer.charges ? balanceForCharges(charges) : customer.balanceCents) : 0,
+    consents: consentRows,
+    consentLabels: consentRows.filter((consent) => consent.status === 'granted').map((consent) => consent.label),
     createdAt: customer.lastContact,
   };
 }
 
-function labelsFromConsents(value: any): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => (typeof item === 'string' ? item : item?.label ?? item?.name ?? '')).filter(Boolean);
-}
-
-function customerFromRaw(raw: any, members: MemberRow[] = memberRowsForCustomer(relationArray(raw.mentis_members ?? raw.members))) {
+function customerFromRaw(raw: any, members: MemberRow[] = memberRowsForCustomer(relationArray(raw.mentis_members ?? raw.members)), charges: CustomerCharge[] = []) {
   const membersRaw = relationArray(raw.mentis_members ?? raw.members);
   const memberRows = members.length ? members : memberRowsForCustomer(membersRaw);
-  const balanceCents = Number(raw.balance_cents ?? 0);
+  const consentRows = normalizeConsents(raw.consents);
+  const balanceCents = balanceForCharges(charges);
   return {
     id: raw.id,
     name: raw.name,
@@ -305,9 +381,11 @@ function customerFromRaw(raw: any, members: MemberRow[] = memberRowsForCustomer(
     nokPhone: raw.nok_phone ?? null,
     status: balanceCents > 0 ? 'attention' : memberRows.length ? 'active' : 'inactive',
     members: memberRows,
+    consents: consentRows,
+    charges,
     lastContact: raw.last_contact ?? raw.updated_at ?? raw.created_at ?? null,
     balanceCents,
-    consentLabels: labelsFromConsents(raw.consents),
+    consentLabels: consentRows.filter((consent) => consent.status === 'granted').map((consent) => consent.label),
     createdAt: raw.created_at ?? null,
   } satisfies CustomerRow;
 }
@@ -325,7 +403,7 @@ function exportRows(filename: string, rows: Record<string, string | number>[]) {
 async function loadMembersFromSupabase(organizationId?: string) {
   const memberQuery: any = supabase
     .from('mentis_members')
-    .select('id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at,mentis_customers!customer_id_fkey(id,name,phone,email)')
+    .select('id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at,mentis_customers!customer_id_fkey(id,name,phone,email,nok_name,nok_phone)')
     .order('name');
   if (organizationId) memberQuery.eq('organization_id', organizationId);
 
@@ -334,16 +412,31 @@ async function loadMembersFromSupabase(organizationId?: string) {
     supabase.from('mentis_attendance_records').select('member_id,status,recorded_at').limit(5000),
   ]);
   if (membersResult.error) throw new Error(membersResult.error.message);
+  const ids = (membersResult.data ?? []).map((member: any) => member.id);
+  let tagQuery: any = supabase.from('mentis_entity_tags').select('entity_id,mentis_tag_values(label)').eq('entity_type', 'member');
+  if (organizationId) tagQuery = tagQuery.eq('organization_id', organizationId);
+  if (ids.length) tagQuery = tagQuery.in('entity_id', ids);
+  else tagQuery = null;
+  const tagResult = tagQuery ? await tagQuery : { data: [], error: null };
+  if (tagResult.error) console.warn('Member tags could not be loaded:', tagResult.error.message);
   const attendanceByMember = new Map<string, any[]>();
+  const tagsByMember = new Map<string, string[]>();
   for (const record of attendanceResult.data ?? []) {
     const list = attendanceByMember.get(record.member_id) ?? [];
     list.push(record);
     attendanceByMember.set(record.member_id, list);
   }
-  return (membersResult.data ?? []).map((member: any) => memberFromRaw(member, { attendance: attendanceByMember.get(member.id) ?? [] }));
+  for (const record of tagResult.data ?? []) {
+    const label = firstRelation(record.mentis_tag_values)?.label;
+    if (!label) continue;
+    const list = tagsByMember.get(record.entity_id) ?? [];
+    list.push(label);
+    tagsByMember.set(record.entity_id, list);
+  }
+  return (membersResult.data ?? []).map((member: any) => memberFromRaw(member, { attendance: attendanceByMember.get(member.id) ?? [], tags: tagsByMember.get(member.id) ?? [] }));
 }
 
-async function loadCustomersFromSupabase(organizationId?: string) {
+async function loadCustomersFromSupabase(organizationId?: string, includeFinance = false) {
   const query: any = supabase
     .from('mentis_customers')
     .select('id,name,phone,email,guardian_a,guardian_b,nok_name,nok_phone,consents,created_at,updated_at,mentis_members!customer_id_fkey(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)')
@@ -351,11 +444,27 @@ async function loadCustomersFromSupabase(organizationId?: string) {
   if (organizationId) query.eq('organization_id', organizationId);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
-  return (data ?? []).map((customer: any) => customerFromRaw(customer));
+  const customers = data ?? [];
+  const customerIds = customers.map((customer: any) => customer.id);
+  let charges: any[] = [];
+  if (includeFinance && customerIds.length) {
+    let chargesQuery: any = supabase.from('mentis_customer_charges').select('id,customer_id,amount_cents,status,due_date,created_at').in('customer_id', customerIds).order('created_at', { ascending: false }).limit(5000);
+    if (organizationId) chargesQuery = chargesQuery.eq('organization_id', organizationId);
+    const result = await chargesQuery;
+    if (result.error) throw new Error(result.error.message);
+    charges = result.data ?? [];
+  }
+  const chargesByCustomer = new Map<string, CustomerCharge[]>();
+  for (const charge of charges) {
+    const list = chargesByCustomer.get(charge.customer_id) ?? [];
+    list.push(normalizeCharge(charge));
+    chargesByCustomer.set(charge.customer_id, list);
+  }
+  return customers.map((customer: any) => customerFromRaw(customer, undefined, chargesByCustomer.get(customer.id) ?? []));
 }
 
 function memberFilterMatch(member: MemberRow, query: string) {
-  const haystack = [member.name, member.memberCode, member.customerName, member.customerEmail, member.playingStyle, ...member.groups]
+  const haystack = [member.name, member.memberCode, member.customerName, member.customerEmail, member.playingStyle, ...member.groups, ...member.tags]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
@@ -367,22 +476,37 @@ function customerFilterMatch(customer: CustomerRow, query: string) {
   return haystack.includes(query.trim().toLowerCase());
 }
 
+function iconForPersonStatus(status: PersonStatus | CustomerRow['status']) {
+  if (status === 'active') return CheckCircle2;
+  if (status === 'paused') return PauseCircle;
+  if (status === 'atRisk' || status === 'attention') return TriangleAlert;
+  return CircleX;
+}
+
 function MemberStatusBadge({ member }: { member: MemberRow }) {
-  return <Badge tone={statusTone(member.status)} dot>{statusLabel(member.status)}</Badge>;
+  const Icon = iconForPersonStatus(member.status);
+  return <StatusChip status={member.status} label={statusLabel(member.status)} icon={<Icon aria-hidden />} dot={false} />;
 }
 
 function CustomerStatusBadge({ customer }: { customer: CustomerRow }) {
-  return <Badge tone={statusTone(customer.status)} dot>{statusLabel(customer.status)}</Badge>;
+  const Icon = iconForPersonStatus(customer.status);
+  return <StatusChip status={customer.status} label={statusLabel(customer.status)} icon={<Icon aria-hidden />} dot={false} />;
 }
 
 function AttentionMarker({ member }: { member: MemberRow }) {
-  if (!member.alert && !member.specialNeedsFlag) return null;
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft px-1.5 py-0.5 text-2xs font-semibold text-warning" title={member.alert ?? 'Support note on file'}>
+  if (member.alert) return (
+    <span className="inline-flex items-center rounded-full bg-warning-soft p-1 text-warning" title={member.alert}>
       <TriangleAlert className="size-3" aria-hidden />
-      <span className="sr-only">Needs attention</span>
+      <span className="sr-only">Attendance follow-up</span>
     </span>
   );
+  if (member.specialNeedsFlag) return (
+    <span className="inline-flex items-center rounded-full bg-surface-inset p-1 text-ink-faint" title="Support note on file">
+      <ShieldCheck className="size-3" aria-hidden />
+      <span className="sr-only">Support note on file</span>
+    </span>
+  );
+  return null;
 }
 
 function MemberRowCard({ member }: { member: MemberRow }) {
@@ -417,7 +541,7 @@ function MemberRowCard({ member }: { member: MemberRow }) {
  * Members list
  * -------------------------------------------------------------------------- */
 
-export function Members() {
+export function Members({ embedded = false }: { embedded?: boolean }) {
   const { staff, canDo } = useAuth();
   const demo = demoMode();
   const [rows, setRows] = useState<MemberRow[]>([]);
@@ -475,14 +599,14 @@ export function Members() {
 
     const loadTaxonomy = async () => {
       const [tagTypeResult, tagValueResult] = await Promise.all([
-        supabase.from('mentis_tag_types').select('*').eq('scope', 'member').eq('is_active', true).order('sort_order', { ascending: true }),
-        supabase.from('mentis_tag_values').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
+        (() => { let query: any = supabase.from('mentis_tag_types').select('*').eq('scope', 'member').eq('is_active', true).order('sort_order', { ascending: true }); if (staff?.organization_id) query = query.eq('organization_id', staff.organization_id); return query; })(),
+        (() => { let query: any = supabase.from('mentis_tag_values').select('*').eq('is_active', true).order('sort_order', { ascending: true }); if (staff?.organization_id) query = query.eq('organization_id', staff.organization_id); return query; })(),
       ]);
       setTagTypes(tagTypeResult.data ?? []);
       setTagValues(tagValueResult.data ?? []);
     };
     void loadTaxonomy();
-  }, [demo]);
+  }, [demo, staff?.organization_id]);
 
   useEffect(() => {
     if (!selectedTagType && !selectedTagValue) {
@@ -490,13 +614,21 @@ export function Members() {
       return;
     }
     if (demo) {
-      setTaggedMemberIds(new Set());
+      const definition = TAG_TYPE_DEFINITIONS.find((tag) => tag.scope === 'member' && tag.code === selectedTagType);
+      const selectedValue = TAG_TYPE_DEFINITIONS.flatMap((tag) => tag.options.map((option) => ({ tag, option, id: `${tag.scope}:${tag.code}:${option.code}` }))).find((item) => item.id === selectedTagValue);
+      const matches = rows.filter((member) => {
+        if (!definition) return false;
+        if (selectedValue) return selectedValue.tag.code === definition.code && member.tags.includes(`${definition.label}: ${selectedValue.option.label}`);
+        return member.tags.some((tag) => tag.startsWith(`${definition.label}: `));
+      });
+      setTaggedMemberIds(new Set(matches.map((member) => member.id)));
       return;
     }
 
     let cancelled = false;
     const loadTaggedMemberIds = async () => {
-      const query = supabase.from('mentis_entity_tags').select('entity_id').eq('entity_type', 'member');
+      let query: any = supabase.from('mentis_entity_tags').select('entity_id').eq('entity_type', 'member');
+      if (staff?.organization_id) query = query.eq('organization_id', staff.organization_id);
       const { data, error } = selectedTagValue
         ? await query.eq('tag_value_id', selectedTagValue)
         : await query.eq('tag_type_id', selectedTagType);
@@ -508,12 +640,12 @@ export function Members() {
     return () => {
       cancelled = true;
     };
-  }, [demo, selectedTagType, selectedTagValue]);
+  }, [demo, rows, selectedTagType, selectedTagValue, staff?.organization_id]);
 
   const counts = useMemo(() => ({
     all: rows.length,
     active: rows.filter((row) => row.status === 'active').length,
-    attention: rows.filter((row) => row.status === 'atRisk' || row.specialNeedsFlag).length,
+    attention: rows.filter((row) => row.status === 'atRisk').length,
     inactive: rows.filter((row) => row.status === 'inactive').length,
   }), [rows]);
 
@@ -525,7 +657,7 @@ export function Members() {
   const filteredRows = useMemo(() => {
     const next = rows.filter((member) => {
       const matchesSearch = !query || memberFilterMatch(member, query);
-      const matchesFilter = filter === 'all' || (filter === 'attention' ? member.status === 'atRisk' || member.specialNeedsFlag : member.status === filter);
+      const matchesFilter = filter === 'all' || (filter === 'attention' ? member.status === 'atRisk' : member.status === filter);
       const matchesTag = !selectedTagType && !selectedTagValue || taggedMemberIds.has(member.id);
       return matchesSearch && matchesFilter && matchesTag;
     });
@@ -537,26 +669,26 @@ export function Members() {
   }, [filter, query, rows, selectedTagType, selectedTagValue, sort, taggedMemberIds]);
 
   const averageAttendance = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.attendancePct, 0) / rows.length) : 0;
-  const attentionRows = rows.filter((row) => row.status === 'atRisk' || row.specialNeedsFlag).sort((a, b) => a.attendancePct - b.attendancePct);
+  const attentionRows = rows.filter((row) => row.status === 'atRisk').sort((a, b) => a.attendancePct - b.attendancePct);
 
   return (
     <div className="space-y-5">
-      <PageHeader
+      {!embedded && <PageHeader
         eyebrow="People / roster"
         title="Members"
         subtitle={demo ? 'A single view of every player, their household, and the next best action. Demo data is ready to explore.' : 'A single view of every player, their household, and the next best action.'}
         breadcrumbs={[{ label: 'People' }, { label: 'Members' }]}
         actions={
           <>
-            <button className="btn btn-ghost" type="button" onClick={() => exportRows('members.csv', filteredRows.map((row) => ({ name: row.name, memberCode: row.memberCode, customer: row.customerName ?? '', attendance: `${row.attendancePct}%`, status: statusLabel(row.status) })))}>
+            {canDo('gdpr.export') && <button className="btn btn-ghost" type="button" onClick={() => exportRows('members.csv', filteredRows.map((row) => ({ name: row.name, memberCode: row.memberCode, customer: row.customerName ?? '', attendance: `${row.attendancePct}%`, status: statusLabel(row.status) })))}>
               <Download className="size-4" aria-hidden /> Export
-            </button>
+            </button>}
             {canDo('customers.manage') && <Link to="/members/new" className="btn btn-primary"><Plus className="size-4" aria-hidden /> Add member</Link>}
           </>
         }
-      />
+      />}
 
-      <div className="card aurora overflow-hidden p-5 sm:p-6">
+      {!embedded && <div className="card aurora overflow-hidden p-5 sm:p-6">
         <div className="relative flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
           <div className="max-w-2xl">
             <div className="overline text-brand-text">Roster pulse</div>
@@ -569,16 +701,16 @@ export function Members() {
             <span className="badge badge-outline">{counts.inactive} inactive</span>
           </div>
         </div>
-      </div>
+      </div>}
 
-      {loading ? <SkeletonStatGrid count={4} /> : (
+      {!embedded && (loading ? <SkeletonStatGrid count={4} /> : (
         <StatGrid>
           <StatCard label="Active members" value={counts.active} icon={UsersRound} tone="brand" hint="currently on the roster" to="/members" />
           <StatCard label="Average attendance" value={averageAttendance} format={(value) => `${Math.round(value)}%`} icon={HeartPulse} tone={averageAttendance >= 80 ? 'success' : 'warning'} hint="present or late" sparkline={rows.slice(0, 8).map((row) => row.attendancePct)} />
-          <StatCard label="Follow-up queue" value={counts.attention} icon={TriangleAlert} tone={counts.attention ? 'warning' : 'success'} hint={counts.attention ? 'attendance or support signal' : 'all clear'} to="#follow-up" />
+          <StatCard label="Follow-up queue" value={counts.attention} icon={TriangleAlert} tone={counts.attention ? 'warning' : 'success'} hint={counts.attention ? 'attendance signal only' : 'no attendance follow-ups'} to="#follow-up" />
           <StatCard label="Linked households" value={new Set(rows.map((row) => row.customerId).filter(Boolean)).size} icon={UserRoundCheck} tone="info" hint="with a customer record" to="/customers" />
         </StatGrid>
-      )}
+      ))}
 
       <div className="card p-3 sm:p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -620,6 +752,7 @@ export function Members() {
             </div>
           </div>
           <div className="flex items-center justify-between gap-2 sm:justify-end">
+            {embedded && canDo('gdpr.export') && <button className="btn btn-ghost btn-sm" type="button" onClick={() => exportRows('members.csv', filteredRows.map((row) => ({ name: row.name, memberCode: row.memberCode, customer: row.customerName ?? '', attendance: `${row.attendancePct}%`, status: statusLabel(row.status) })))}><Download className="size-3.5" /> Export CSV</button>}
             <label className="flex items-center gap-2 text-xs text-ink-muted">Sort
               <select className="input w-auto py-1.5" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} aria-label="Sort members">
                 <option value="name">Name</option><option value="attendance">Attendance</option><option value="recent">Most recent</option>
@@ -678,12 +811,34 @@ export function Members() {
  * Customer list
  * -------------------------------------------------------------------------- */
 
-export function Customers() {
+function CustomerRowCard({ customer, showFinance }: { customer: CustomerRow; showFinance: boolean }) {
+  return (
+    <article className="card card-interactive p-4">
+      <div className="flex items-start gap-3">
+        <Avatar name={customer.name} size="md" />
+        <div className="min-w-0 flex-1">
+          <Link to={`/customers/${customer.id}`} className="block truncate font-display font-bold text-ink hover:text-brand-text">{customer.name}</Link>
+          <div className="mt-1 flex flex-wrap items-center gap-2"><CustomerStatusBadge customer={customer} /><span className="text-xs text-ink-faint">{customer.members.length} linked {customer.members.length === 1 ? 'member' : 'members'}</span>{customer.consents.some((consent) => consent.status === 'expired') && <Badge tone="danger" dot>Consent expired</Badge>}</div>
+        </div>
+        <Link to={`/customers/${customer.id}`} className="btn btn-ghost btn-icon" aria-label={`Open ${customer.name}`}><ArrowUpRight className="size-4" /></Link>
+      </div>
+      <div className="mt-4 space-y-2 border-t border-line pt-3 text-xs">
+        <div className="flex items-center justify-between gap-3"><span className="text-ink-faint">Household members</span><span className="max-w-[65%] truncate text-right text-ink-muted">{customer.members.map((member) => member.name).join(', ') || 'No members linked'}</span></div>
+        <div className="flex items-center justify-between gap-3"><span className="text-ink-faint">Last touch</span><span className="text-ink-muted">{customer.lastContact ? formatDate(customer.lastContact) : 'No activity'}</span></div>
+        {showFinance && customer.balanceCents > 0 && <div className="flex items-center justify-between gap-3"><span className="text-ink-faint">Outstanding debit</span><span className="font-semibold text-warning">£{(customer.balanceCents / 100).toFixed(2)}</span></div>}
+      </div>
+    </article>
+  );
+}
+
+export function Customers({ embedded = false }: { embedded?: boolean }) {
   const { staff, canDo } = useAuth();
   const demo = demoMode();
+  const canSeeFinance = canDo('billing.viewAll') || canDo('charges.manage');
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterValue>('all');
+  const [view, setView] = useState<'table' | 'cards'>('table');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -693,26 +848,16 @@ export function Customers() {
     setLoading(true);
     setError('');
     if (demo) {
-      setRows(demoCustomersSnapshot().map(customerFromDemo));
+      setRows(demoCustomersSnapshot().map((customer) => customerFromDemo(customer, canSeeFinance)));
       setLoading(false);
-      return () => {
-        cancelled = true;
-      };
+      return () => { cancelled = true; };
     }
-    loadCustomersFromSupabase(staff?.organization_id)
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'The customer directory could not be loaded.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [demo, reloadKey, staff?.organization_id]);
+    loadCustomersFromSupabase(staff?.organization_id, canSeeFinance)
+      .then((data) => { if (!cancelled) setRows(data); })
+      .catch((reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'The customer directory could not be loaded.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [canSeeFinance, demo, reloadKey, staff?.organization_id]);
 
   const counts = useMemo(() => ({
     all: rows.length,
@@ -729,31 +874,61 @@ export function Customers() {
 
   const linkedMembers = rows.reduce((sum, row) => sum + row.members.length, 0);
   const householdsWithChildren = rows.filter((row) => row.members.some((member) => (ageFromDob(member.dateOfBirth) ?? 18) < 18)).length;
+  const exportCustomers = () => exportRows('customers.csv', filteredRows.map((row) => ({ name: row.name, email: row.email ?? '', phone: row.phone ?? '', members: row.members.map((member) => member.name).join('; '), status: statusLabel(row.status) })));
 
   return (
     <div className="space-y-5">
-      <PageHeader
+      {!embedded && <PageHeader
         eyebrow="People / households"
         title="Customers"
-        subtitle={demo ? 'The account holder, payer, guardian, and communication context around every member.' : 'The account holder, payer, guardian, and communication context around every member.'}
-        breadcrumbs={[{ label: 'People' }, { label: 'Customers' }]}
-        actions={
-          <>
-            <button className="btn btn-ghost" type="button" onClick={() => exportRows('customers.csv', filteredRows.map((row) => ({ name: row.name, email: row.email ?? '', phone: row.phone ?? '', members: row.members.map((member) => member.name).join('; '), status: statusLabel(row.status) })))}><Download className="size-4" /> Export</button>
-            {canDo('customers.manage') && <Link to="/customers/new" className="btn btn-primary"><Plus className="size-4" /> Add customer</Link>}
-          </>
-        }
-      />
+        subtitle="The account holder, payer, guardian, and communication context around every member."
+        breadcrumbs={[{ label: 'People', to: '/people' }, { label: 'Customers' }]}
+        actions={<>{canDo('gdpr.export') && <button className="btn btn-ghost" type="button" onClick={exportCustomers}><Download className="size-4" /> Export CSV</button>}{canDo('customers.manage') && <Link to="/customers/new" className="btn btn-primary"><Plus className="size-4" /> Add customer</Link>}</>}
+      />}
 
-      <div className="card aurora overflow-hidden p-5 sm:p-6">
-        <div className="relative flex flex-col justify-between gap-5 lg:flex-row lg:items-end"><div className="max-w-2xl"><div className="overline text-brand-text">Customer 360</div><h2 className="mt-2 max-w-xl font-display text-2xl font-extrabold tracking-[-0.025em] text-ink sm:text-3xl">Turn a contact record into a relationship.</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-muted">Household members, attendance, consent, billing signals, and recent conversations — together in one calm view.</p></div><div className="flex flex-wrap gap-2"><span className="badge badge-brand badge-dot">{linkedMembers} linked members</span><span className="badge badge-info">{householdsWithChildren} junior households</span></div></div>
+      {!embedded && <div className="card aurora overflow-hidden p-5 sm:p-6">
+        <div className="relative flex flex-col justify-between gap-5 lg:flex-row lg:items-end"><div className="max-w-2xl"><div className="overline text-brand-text">Household directory</div><h2 className="mt-2 max-w-xl font-display text-2xl font-extrabold tracking-[-0.025em] text-ink sm:text-3xl">Keep account holders distinct from players.</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-muted">Review member links, communication preferences, and consent state. Charge information is limited to finance-authorised roles.</p></div><div className="flex flex-wrap gap-2"><span className="badge badge-brand badge-dot">{linkedMembers} linked members</span><span className="badge badge-info">{householdsWithChildren} junior households</span></div></div>
+      </div>}
+
+      {!embedded && (loading ? <SkeletonStatGrid count={4} /> : <StatGrid>
+        <StatCard label="Households" value={counts.active + counts.attention} icon={UsersRound} tone="brand" hint="active customer records" to="/customers" />
+        <StatCard label="Linked members" value={linkedMembers} icon={UserRoundCheck} tone="info" hint="across these households" to="/members" />
+        <StatCard label={canSeeFinance ? 'Outstanding accounts' : 'Households to link'} value={canSeeFinance ? counts.attention : rows.filter((row) => !row.members.length).length} icon={canSeeFinance ? MessageCircle : UsersRound} tone={canSeeFinance && counts.attention ? 'warning' : 'success'} hint={canSeeFinance ? 'outstanding debits only' : 'no member linked yet'} />
+        <StatCard label="Junior households" value={householdsWithChildren} icon={ShieldCheck} tone="accent" hint="guardian context available" />
+      </StatGrid>)}
+
+      <div className="card p-3 sm:p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+            <InputWithIcon value={query} onChange={(event) => setQuery(event.target.value)} onClear={() => setQuery('')} icon={<Search />} placeholder="Search household, email, member…" aria-label="Search customers" className="sm:max-w-md" />
+            <SegmentedControl ariaLabel="Customer status filter" size="sm" value={filter} onChange={setFilter} options={[{ value: 'all', label: 'All', count: counts.all }, { value: 'active', label: 'Active', count: counts.active }, ...(canSeeFinance ? [{ value: 'attention' as const, label: 'Outstanding', count: counts.attention }] : []), { value: 'inactive', label: 'Inactive', count: counts.inactive }]} />
+          </div>
+          <div className="flex items-center justify-between gap-2 sm:justify-end">
+            {embedded && canDo('gdpr.export') && <button className="btn btn-ghost btn-sm" type="button" onClick={exportCustomers}><Download className="size-3.5" /> Export CSV</button>}
+            <span className="text-xs text-ink-faint">{filteredRows.length} customer records</span>
+            <div className="flex rounded-md border border-line bg-surface-inset p-0.5" role="group" aria-label="Customer view">
+              <button type="button" className={`rounded-sm p-1.5 ${view === 'table' ? 'bg-surface text-brand-text shadow-sm' : 'text-ink-faint'}`} onClick={() => setView('table')} aria-label="Table view" aria-pressed={view === 'table'}><SlidersHorizontal className="size-4 rotate-90" /></button>
+              <button type="button" className={`rounded-sm p-1.5 ${view === 'cards' ? 'bg-surface text-brand-text shadow-sm' : 'text-ink-faint'}`} onClick={() => setView('cards')} aria-label="Card view" aria-pressed={view === 'cards'}><Grid2X2 className="size-4" /></button>
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReloadKey((key) => key + 1)} aria-label="Refresh customers"><RefreshCw className="size-3.5" /><span className="hidden sm:inline">Refresh</span></button>
+          </div>
+        </div>
+        {(query || filter !== 'all') && <div className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-xs text-ink-muted"><span>Showing {filteredRows.length} of {rows.length}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters <X className="size-3" /></button></div>}
       </div>
 
-      {loading ? <SkeletonStatGrid count={4} /> : <StatGrid><StatCard label="Households" value={counts.active + counts.attention} icon={UsersRound} tone="brand" hint="active customer records" to="/customers" /><StatCard label="Linked members" value={linkedMembers} icon={UserRoundCheck} tone="info" hint="across these households" to="/members" /><StatCard label="Needs a reply" value={counts.attention} icon={MessageCircle} tone={counts.attention ? 'warning' : 'success'} hint="payment or contact signal" /><StatCard label="Junior households" value={householdsWithChildren} icon={ShieldCheck} tone="accent" hint="guardian context ready" /></StatGrid>}
-
-      <div className="card p-3 sm:p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center"><InputWithIcon value={query} onChange={(event) => setQuery(event.target.value)} onClear={() => setQuery('')} icon={<Search />} placeholder="Search household, email, member…" aria-label="Search customers" className="sm:max-w-md" /><SegmentedControl ariaLabel="Customer status filter" size="sm" value={filter} onChange={setFilter} options={[{ value: 'all', label: 'All', count: counts.all }, { value: 'active', label: 'Active', count: counts.active }, { value: 'attention', label: 'Attention', count: counts.attention }, { value: 'inactive', label: 'Inactive', count: counts.inactive }]} /></div><div className="text-xs text-ink-faint">{filteredRows.length} customer records</div></div>{(query || filter !== 'all') && <div className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-xs text-ink-muted"><span>Showing {filteredRows.length} of {rows.length}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters <X className="size-3" /></button></div>}</div>
-
-      <section className="card min-w-0 overflow-hidden" aria-label="Customer directory"><div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5"><div><h2 className="font-display text-base font-bold text-ink">Household directory</h2><p className="mt-0.5 text-xs text-ink-faint">Open a customer 360 to see the full relationship.</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setReloadKey((key) => key + 1)}><RefreshCw className="size-3.5" /> Refresh</button></div>{loading ? <SkeletonTable rows={6} columns={5} /> : error ? <ErrorState message={error} onRetry={() => setReloadKey((key) => key + 1)} /> : filteredRows.length === 0 ? rows.length === 0 && !query && filter === 'all' ? <NoDataState entity="customers" description="Create the account holder first, then link one or more members to their household." action={canDo('customers.manage') && <Link to="/customers/new" className="btn btn-primary"><Plus className="size-4" /> Add customer</Link>} /> : <NoResultsState query={query} onClear={() => { setQuery(''); setFilter('all'); }} /> : <div className="grid-table-wrap"><table className="grid"><thead><tr><th>Customer</th><th>Contact</th><th>Members</th><th>Last touch</th><th>Status</th><th><span className="sr-only">Open</span></th></tr></thead><tbody>{filteredRows.map((customer) => <tr key={customer.id} data-clickable><td><div className="flex min-w-[200px] items-center gap-3"><Avatar name={customer.name} size="sm" /><div className="min-w-0"><Link to={`/customers/${customer.id}`} className="truncate font-semibold text-ink hover:text-brand-text">{customer.name}</Link><div className="mt-0.5 text-xs text-ink-faint">{customer.members.length ? `${customer.members.length} linked ${customer.members.length === 1 ? 'member' : 'members'}` : 'No members linked'}</div></div></div></td><td><div className="min-w-[170px]">{customer.email ? <a href={`mailto:${customer.email}`} className="block truncate text-ink-muted hover:text-brand-text">{customer.email}</a> : <span className="text-ink-faint">No email</span>}{customer.phone && <a href={`tel:${customer.phone}`} className="mt-0.5 block text-xs text-ink-faint hover:text-brand-text">{customer.phone}</a>}</div></td><td><div className="flex min-w-[170px] -space-x-2">{customer.members.slice(0, 4).map((member) => <Link key={member.id} to={`/members/${member.id}`} title={member.name} className="rounded-full ring-2 ring-[var(--surface)]"><Avatar name={member.name} size="sm" /></Link>)}{customer.members.length > 4 && <span className="grid size-8 place-items-center rounded-full bg-surface-inset text-xs font-semibold text-ink-muted ring-2 ring-[var(--surface)]">+{customer.members.length - 4}</span>}<span className="ml-3 self-center text-xs text-ink-muted">{customer.members.length ? customer.members.map((member) => member.name).join(', ') : '—'}</span></div></td><td className="whitespace-nowrap">{customer.lastContact ? formatDate(customer.lastContact) : 'No activity'}</td><td><CustomerStatusBadge customer={customer} />{customer.balanceCents > 0 && <div className="mt-1 text-xs font-medium text-warning">£{(customer.balanceCents / 100).toFixed(2)} due</div>}</td><td><Link to={`/customers/${customer.id}`} className="btn btn-ghost btn-sm" aria-label={`Open ${customer.name}`}>360 <ArrowRight className="size-3.5" /></Link></td></tr>)}</tbody></table></div>}</section>
+      <section className="card min-w-0 overflow-hidden" aria-label="Customer directory">
+        {!embedded && <div className="border-b border-line px-4 py-3.5 sm:px-5"><h2 className="font-display text-base font-bold text-ink">Household directory</h2><p className="mt-0.5 text-xs text-ink-faint">Open a customer 360 to see the full relationship.</p></div>}
+        {loading ? <SkeletonTable rows={6} columns={5} /> : error ? <ErrorState message={error} onRetry={() => setReloadKey((key) => key + 1)} /> : filteredRows.length === 0 ? rows.length === 0 && !query && filter === 'all' ? <NoDataState entity="customers" description="Create the account holder first, then link one or more members to their household." action={canDo('customers.manage') && <Link to="/customers/new" className="btn btn-primary"><Plus className="size-4" /> Add customer</Link>} /> : <NoResultsState query={query} onClear={() => { setQuery(''); setFilter('all'); }} /> : view === 'cards' ? (
+          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">{filteredRows.map((customer) => <CustomerRowCard key={customer.id} customer={customer} showFinance={canSeeFinance} />)}</div>
+        ) : (
+          <div className="grid-table-wrap"><table className="grid"><thead><tr><th>Customer</th><th>Contact</th><th>Members</th><th>Last touch</th><th>Status</th><th><span className="sr-only">Open</span></th></tr></thead><tbody>{filteredRows.map((customer) => <tr key={customer.id} data-clickable>
+            <td><div className="flex min-w-[200px] items-center gap-3"><Avatar name={customer.name} size="sm" /><div className="min-w-0"><Link to={`/customers/${customer.id}`} className="truncate font-semibold text-ink hover:text-brand-text">{customer.name}</Link><div className="mt-0.5 text-xs text-ink-faint">{customer.members.length ? `${customer.members.length} linked ${customer.members.length === 1 ? 'member' : 'members'}` : 'No members linked'}</div></div></div></td>
+            <td><div className="min-w-[170px]">{customer.email ? <a href={`mailto:${customer.email}`} className="block truncate text-ink-muted hover:text-brand-text">{customer.email}</a> : <span className="text-ink-faint">No email</span>}{customer.phone && <a href={`tel:${customer.phone}`} className="mt-0.5 block text-xs text-ink-faint hover:text-brand-text">{customer.phone}</a>}</div></td>
+            <td><div className="flex min-w-[170px] -space-x-2">{customer.members.slice(0, 4).map((member) => <Link key={member.id} to={`/members/${member.id}`} title={member.name} className="rounded-full ring-2 ring-[var(--surface)]"><Avatar name={member.name} size="sm" /></Link>)}{customer.members.length > 4 && <span className="grid size-8 place-items-center rounded-full bg-surface-inset text-xs font-semibold text-ink-muted ring-2 ring-[var(--surface)]">+{customer.members.length - 4}</span>}<span className="ml-3 self-center text-xs text-ink-muted">{customer.members.length ? customer.members.map((member) => member.name).join(', ') : '—'}</span></div></td>
+            <td className="whitespace-nowrap">{customer.lastContact ? formatDate(customer.lastContact) : 'No activity'}</td><td><CustomerStatusBadge customer={customer} />{customer.consents.some((consent) => consent.status === 'expired') && <div className="mt-1 text-xs font-semibold text-danger">Consent expired</div>}{canSeeFinance && customer.balanceCents > 0 && <div className="mt-1 text-xs font-medium text-warning">£{(customer.balanceCents / 100).toFixed(2)} outstanding debit</div>}</td><td><Link to={`/customers/${customer.id}`} className="btn btn-ghost btn-sm" aria-label={`Open ${customer.name}`}>Open <ArrowRight className="size-3.5" /></Link></td>
+          </tr>)}</tbody></table></div>
+        )}
+      </section>
     </div>
   );
 }
@@ -779,12 +954,42 @@ function CustomerMemberCard({ member }: { member: MemberRow }) {
   return <Link to={`/members/${member.id}`} className="card card-interactive block p-4"><div className="flex items-start gap-3"><Avatar name={member.name} size="md" /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate font-display text-base font-bold text-ink">{member.name}</h3><AttentionMarker member={member} /></div><p className="mt-0.5 text-xs text-ink-muted">{ageFromDob(member.dateOfBirth) ?? '—'} years · {member.groups[0] ?? 'No group assigned'}</p></div><ArrowUpRight className="size-4 text-ink-faint" /></div><div className="mt-4 grid grid-cols-2 gap-3"><div><div className="overline">Attendance</div><div className="mt-1 font-display text-lg font-bold text-ink">{member.attendancePct}%</div></div><div><div className="overline">Next session</div><div className="mt-1 text-sm font-semibold text-ink">{member.nextSession ? formatDateTime(member.nextSession) : 'Not booked'}</div></div></div><div className="mt-3"><Progress value={member.attendancePct} max={100} size="sm" tone={member.attendancePct >= 80 ? 'success' : member.attendancePct >= 70 ? 'brand' : 'warning'} /></div></Link>;
 }
 
+function chargeState(status: CustomerCharge['status']) {
+  const states: Record<CustomerCharge['status'], { label: string; tone: BadgeTone }> = {
+    pendingApproval: { label: 'Pending approval', tone: 'warning' },
+    approved: { label: 'Approved', tone: 'info' },
+    recovered: { label: 'Recovered', tone: 'success' },
+    outstandingDebit: { label: 'Outstanding debit', tone: 'danger' },
+  };
+  return states[status];
+}
+
+function CustomerConsentList({ consents }: { consents: ConsentRecord[] }) {
+  if (!consents.length) return <EmptyState icon={ShieldCheck} title="No consent records" description="Consent choices have not been recorded for this customer." className="py-8" />;
+  return <div className="divide-y divide-line">{consents.map((consent) => {
+    const label = consent.status === 'granted' ? 'Granted' : consent.status === 'expired' ? 'Expired' : consent.status === 'withdrawn' ? 'Withdrawn' : 'State not verified';
+    const Icon = consent.status === 'granted' ? CheckCircle2 : consent.status === 'expired' ? TriangleAlert : consent.status === 'withdrawn' ? CircleX : ShieldCheck;
+    return <div key={consent.id} className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="text-sm font-semibold text-ink">{consent.label}</div><div className="mt-1 text-xs text-ink-faint">{consent.issuedAt ? `Recorded ${formatDate(consent.issuedAt, true)}` : 'No recording date'} · {consent.validUntil ? `Expires ${formatDate(consent.validUntil, true)}` : 'No expiry recorded'}</div></div><StatusChip status={consent.status} label={label} icon={<Icon aria-hidden />} dot={false} /></div>;
+  })}</div>;
+}
+
+function CustomerChargeList({ charges }: { charges: CustomerCharge[] }) {
+  if (!charges.length) return <EmptyState icon={ReceiptText} title="No customer charges recorded" description="Only individual customer-charge records appear here. No recurring billing is assumed." className="py-8" />;
+  return <div className="divide-y divide-line">{charges.map((charge) => {
+    const view = chargeState(charge.status);
+    const Icon = charge.status === 'recovered' || charge.status === 'approved' ? CheckCircle2 : charge.status === 'outstandingDebit' ? TriangleAlert : Clock3;
+    return <div key={charge.id} className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface-inset text-ink-muted"><ReceiptText className="size-4" /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold text-ink">£{(charge.amountCents / 100).toFixed(2)}</span><StatusChip status={charge.status} label={view.label} icon={<Icon aria-hidden />} dot={false} /></div><div className="mt-1 text-xs text-ink-faint">{charge.createdAt ? `Recorded ${formatDate(charge.createdAt, true)}` : 'Date not recorded'}{charge.dueDate ? ` · Due ${formatDate(charge.dueDate, true)}` : ''}</div></div></div>;
+  })}</div>;
+}
+
 export function Customer360() {
   const { id } = useParams();
   const { staff, canDo } = useAuth();
   const demo = demoMode();
+  const canSeeFinance = canDo('billing.viewAll') || canDo('charges.manage');
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
-  const [tab, setTab] = useState<'overview' | 'members' | 'activity'>('overview');
+  const [tab, setTab] = useState<'overview' | 'members' | 'consents' | 'charges' | 'activity'>('overview');
+  useEffect(() => { if (!canSeeFinance && tab === 'charges') setTab('overview'); }, [canSeeFinance, tab]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -794,26 +999,34 @@ export function Customer360() {
     setLoading(true);
     setError('');
     if (demo) {
-      const customer = demoCustomerById(id);
-      if (!customer) {
+      const source = demoCustomerById(id);
+      if (!source) {
         setError('That demo customer could not be found.');
         setLoading(false);
         return () => { cancelled = true; };
       }
-      setProfile({ customer: customerFromDemo(customer), activities: customer.activity });
+      const customer = customerFromDemo(source, canSeeFinance);
+      const activities = source.activity.filter((item) => canSeeFinance || !/charge|payment|balance/i.test(`${item.title} ${item.detail}`));
+      setProfile({ customer, activities });
       setLoading(false);
       return () => { cancelled = true; };
     }
 
     const load = async () => {
-      const query: any = supabase.from('mentis_customers').select('*,mentis_members!customer_id_fkey(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)').eq('id', id).limit(1).single();
+      const query: any = supabase.from('mentis_customers')
+        .select('id,organization_id,name,phone,email,guardian_a,guardian_b,nok_name,nok_phone,consents,is_also_member_id,created_at,updated_at,mentis_members!customer_id_fkey(id,name,date_of_birth,customer_id,member_code,tte_number,handedness,playing_style,equipment_notes,special_needs_flag,erased_at,created_at)')
+        .eq('id', id).limit(1).single();
       if (staff?.organization_id) query.eq('organization_id', staff.organization_id);
       const { data, error: customerError } = await query;
       if (customerError) throw new Error(customerError.message);
       const memberRowsRaw = relationArray(data?.mentis_members ?? data?.members);
       const memberIds = memberRowsRaw.map((member: any) => member.id).filter(Boolean);
-      const attendanceResult = memberIds.length ? await supabase.from('mentis_attendance_records').select('id,member_id,status,recorded_at,session_id').in('member_id', memberIds).order('recorded_at', { ascending: false }).limit(1000) : { data: [], error: null };
-      const chargesResult = await supabase.from('mentis_customer_charges').select('id,amount_cents,status,due_date,created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50);
+      const [attendanceResult, chargesResult] = await Promise.all([
+        memberIds.length ? supabase.from('mentis_attendance_records').select('id,member_id,status,recorded_at,session_id').in('member_id', memberIds).order('recorded_at', { ascending: false }).limit(1000) : Promise.resolve({ data: [], error: null }),
+        canSeeFinance ? supabase.from('mentis_customer_charges').select('id,customer_id,amount_cents,status,due_date,created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (attendanceResult.error) throw new Error(attendanceResult.error.message);
+      if (chargesResult.error) throw new Error(chargesResult.error.message);
       const attendanceByMember = new Map<string, any[]>();
       for (const record of attendanceResult.data ?? []) {
         const list = attendanceByMember.get(record.member_id) ?? [];
@@ -821,36 +1034,88 @@ export function Customer360() {
         attendanceByMember.set(record.member_id, list);
       }
       const members = memberRowsForCustomer(memberRowsRaw, attendanceByMember);
-      const charges = chargesResult.data ?? [];
-      const customer = customerFromRaw({ ...data, balance_cents: charges.filter((charge: any) => charge.status === 'outstandingDebit' || charge.status === 'pendingApproval').reduce((sum: number, charge: any) => sum + Number(charge.amount_cents ?? 0), 0) }, members);
+      const charges = (chargesResult.data ?? []).map(normalizeCharge);
+      const customer = customerFromRaw(data, members, charges);
       const activities: ActivityItem[] = [
-        ...charges.map((charge: any) => ({ id: `charge-${charge.id}`, title: charge.status === 'recovered' ? 'Payment received' : 'Charge recorded', detail: `£${(Number(charge.amount_cents ?? 0) / 100).toFixed(2)} · ${charge.status}`, date: charge.created_at, tone: charge.status === 'recovered' ? 'success' : 'warning' as BadgeTone })),
+        ...charges.map((charge) => {
+          const state = chargeState(charge.status);
+          return { id: `charge-${charge.id}`, title: `Customer charge ${state.label.toLowerCase()}`, detail: `£${(charge.amountCents / 100).toFixed(2)}${charge.dueDate ? ` · due ${formatDate(charge.dueDate, true)}` : ''}`, date: charge.createdAt ?? '', tone: state.tone };
+        }),
         ...(attendanceResult.data ?? []).slice(0, 8).map((record: any) => ({ id: `attendance-${record.id}`, title: 'Attendance updated', detail: `${record.status} · ${members.find((member) => member.id === record.member_id)?.name ?? 'Member'}`, date: record.recorded_at, tone: resultTone(record.status) })),
       ].sort((a, b) => String(b.date).localeCompare(String(a.date)));
       return { customer, activities };
     };
     load().then((data) => { if (!cancelled) setProfile(data); }).catch((reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'The customer record could not be loaded.'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [demo, id, reloadKey, staff?.organization_id]);
+  }, [canSeeFinance, demo, id, reloadKey, staff?.organization_id]);
 
-  if (loading) return <div className="space-y-5"><PageHeader title="Customer 360" subtitle="Loading household context…" breadcrumbs={[{ label: 'People' }, { label: 'Customers', to: '/customers' }]} /><Skeleton className="h-44 rounded-xl" /><SkeletonStatGrid count={4} /><SkeletonList rows={5} /></div>;
-  if (error || !profile) return <div className="space-y-5"><PageHeader title="Customer 360" subtitle="We could not open this customer record." breadcrumbs={[{ label: 'People' }, { label: 'Customers', to: '/customers' }]} /><div className="card"><ErrorState message={error || 'Customer not found.'} onRetry={() => setReloadKey((key) => key + 1)} /></div></div>;
+  if (loading) return <div className="space-y-5"><PageHeader title="Customer 360" subtitle="Loading household context…" breadcrumbs={[{ label: 'People', to: '/people' }, { label: 'Customers', to: '/customers' }]} /><Skeleton className="h-44 rounded-xl" /><SkeletonStatGrid count={4} /><SkeletonList rows={5} /></div>;
+  if (error || !profile) return <div className="space-y-5"><PageHeader title="Customer 360" subtitle="We could not open this customer record." breadcrumbs={[{ label: 'People', to: '/people' }, { label: 'Customers', to: '/customers' }]} /><div className="card"><ErrorState message={error || 'Customer not found.'} onRetry={() => setReloadKey((key) => key + 1)} /></div></div>;
 
   const { customer, activities } = profile;
   const averageAttendance = customer.members.length ? Math.round(customer.members.reduce((sum, member) => sum + member.attendancePct, 0) / customer.members.length) : 0;
   const attendedSessions = customer.members.reduce((sum, member) => sum + member.sessionsAttended, 0);
+  const balanceCents = balanceForCharges(customer.charges);
+  const consentSummary = customer.consents.filter((consent) => consent.status === 'granted').length;
+  const expiredConsentCount = customer.consents.filter((consent) => consent.status === 'expired').length;
 
-  return <div className="space-y-5"><PageHeader eyebrow="People / customer 360" title={customer.name} subtitle={`${customer.members.length} linked ${customer.members.length === 1 ? 'member' : 'members'} · last touched ${customer.lastContact ? formatDate(customer.lastContact, true) : 'not yet'}`} breadcrumbs={[{ label: 'People' }, { label: 'Customers', to: '/customers' }, { label: customer.name }]} actions={<><Link to="/customers" className="btn btn-ghost"><ArrowLeft className="size-4" /> Directory</Link>{customer.email && <a href={`mailto:${customer.email}`} className="btn btn-primary"><Mail className="size-4" /> Email</a>}{customer.phone && <a href={`tel:${customer.phone}`} className="btn btn-ghost"><Phone className="size-4" /> Call</a>}{canDo('customers.manage') && <Link to="/members/new" className="btn btn-ghost"><UserPlus className="size-4" /> Add member</Link>}</>} />
+  return <div className="space-y-5">
+    <PageHeader eyebrow="People / customer 360" title={customer.name} subtitle={`${customer.members.length} linked ${customer.members.length === 1 ? 'member' : 'members'} · last touched ${customer.lastContact ? formatDate(customer.lastContact, true) : 'not yet'}`} breadcrumbs={[{ label: 'People', to: '/people' }, { label: 'Customers', to: '/customers' }, { label: customer.name }]} actions={<><Link to="/people" className="btn btn-ghost"><ArrowLeft className="size-4" /> People</Link>{customer.email && <a href={`mailto:${customer.email}`} className="btn btn-primary"><Mail className="size-4" /> Email</a>}{customer.phone && <a href={`tel:${customer.phone}`} className="btn btn-ghost"><Phone className="size-4" /> Call</a>}{canDo('customers.manage') && <Link to={`/members/new?customer_id=${encodeURIComponent(customer.id)}`} className="btn btn-ghost"><UserPlus className="size-4" /> Add member</Link>}</>} />
 
-    <div className="card aurora overflow-hidden p-5 sm:p-6"><div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-center gap-4 sm:gap-5"><Avatar name={customer.name} size="lg" /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-display text-2xl font-extrabold tracking-[-0.025em] text-ink">{customer.name}</h2><CustomerStatusBadge customer={customer} /></div><p className="mt-1 text-sm text-ink-muted">Primary household contact · customer record created {formatDate(customer.createdAt, true)}</p><div className="mt-3 flex flex-wrap gap-2 text-xs text-ink-muted">{customer.email && <a href={`mailto:${customer.email}`} className="badge badge-outline hover:border-[var(--brand)] hover:text-brand-text"><Mail className="size-3" /> {customer.email}</a>}{customer.phone && <a href={`tel:${customer.phone}`} className="badge badge-outline hover:border-[var(--brand)] hover:text-brand-text"><Phone className="size-3" /> {customer.phone}</a>}</div></div></div><div className="flex flex-wrap gap-2 lg:justify-end"><span className="badge badge-brand"><Users className="size-3" /> {customer.members.length} linked {customer.members.length === 1 ? 'member' : 'members'}</span>{customer.balanceCents > 0 && <span className="badge badge-warning"><CircleDollarSign className="size-3" /> £{(customer.balanceCents / 100).toFixed(2)} due</span>}{customer.consentLabels.map((label) => <span key={label} className="badge badge-outline"><Check className="size-3 text-success" /> {label}</span>)}</div></div></div>
+    <div className="card aurora overflow-hidden p-5 sm:p-6"><div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-center gap-4 sm:gap-5"><Avatar name={customer.name} size="lg" /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-display text-2xl font-extrabold tracking-[-0.025em] text-ink">{customer.name}</h2><CustomerStatusBadge customer={customer} /></div><p className="mt-1 text-sm text-ink-muted">Account holder / household contact · record created {formatDate(customer.createdAt, true)}</p><div className="mt-3 flex flex-wrap gap-2 text-xs text-ink-muted">{customer.email && <a href={`mailto:${customer.email}`} className="badge badge-outline hover:border-[var(--brand)] hover:text-brand-text"><Mail className="size-3" /> {customer.email}</a>}{customer.phone && <a href={`tel:${customer.phone}`} className="badge badge-outline hover:border-[var(--brand)] hover:text-brand-text"><Phone className="size-3" /> {customer.phone}</a>}</div></div></div><div className="flex flex-wrap gap-2 lg:justify-end"><span className="badge badge-brand"><Users className="size-3" /> {customer.members.length} linked {customer.members.length === 1 ? 'member' : 'members'}</span><span className="badge badge-info"><ShieldCheck className="size-3" /> {consentSummary} current consent{consentSummary === 1 ? '' : 's'}</span>{expiredConsentCount > 0 && <span className="badge badge-danger"><TriangleAlert className="size-3" /> {expiredConsentCount} expired</span>}{canSeeFinance && balanceCents > 0 && <span className="badge badge-warning"><CircleDollarSign className="size-3" /> £{(balanceCents / 100).toFixed(2)} outstanding debit</span>}</div></div></div>
 
-    <StatGrid><StatCard label="Linked members" value={customer.members.length} icon={UsersRound} tone="brand" hint="players in this household" /><StatCard label="Average attendance" value={averageAttendance} format={(value) => `${Math.round(value)}%`} icon={HeartPulse} tone={averageAttendance >= 80 ? 'success' : 'warning'} hint="present or late" /><StatCard label="Sessions attended" value={attendedSessions} icon={CalendarDays} tone="info" hint="across linked members" /><StatCard label="Account balance" value={customer.balanceCents / 100} format={(value) => `£${value.toFixed(2)}`} icon={ReceiptText} tone={customer.balanceCents ? 'warning' : 'success'} hint={customer.balanceCents ? 'needs review' : 'account is clear'} /></StatGrid>
+    <StatGrid>
+      <StatCard label="Linked members" value={customer.members.length} icon={UsersRound} tone="brand" hint="players in this household" />
+      <StatCard label="Average attendance" value={averageAttendance} format={(value) => `${Math.round(value)}%`} icon={HeartPulse} tone={averageAttendance >= 80 ? 'success' : 'warning'} hint="present or late" />
+      <StatCard label="Sessions attended" value={attendedSessions} icon={CalendarDays} tone="info" hint="across linked members" />
+      {canSeeFinance ? <StatCard label="Outstanding debit" value={balanceCents / 100} format={(value) => `£${value.toFixed(2)}`} icon={ReceiptText} tone={balanceCents ? 'warning' : 'success'} hint="from actual customer charges" /> : <StatCard label="Consent records" value={customer.consents.length} icon={ShieldCheck} tone="accent" hint="state and expiry tracked" />}
+    </StatGrid>
 
-    <SegmentedControl ariaLabel="Customer 360 sections" value={tab} onChange={setTab} options={[{ value: 'overview', label: 'Overview' }, { value: 'members', label: 'Members', count: customer.members.length }, { value: 'activity', label: 'Activity', count: activities.length }]} />
+    <SegmentedControl ariaLabel="Customer 360 sections" value={tab} onChange={(value) => setTab(value as typeof tab)} options={[
+      { value: 'overview', label: 'Overview' }, { value: 'members', label: 'Members', count: customer.members.length },
+      { value: 'consents', label: 'Consent', count: customer.consents.length }, ...(canSeeFinance ? [{ value: 'charges' as const, label: 'Charges', count: customer.charges.length }] : []),
+      { value: 'activity', label: 'Activity', count: activities.length },
+    ]} />
 
-    {tab === 'overview' && <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]"><section className="space-y-5"><div><SectionHeader title="People in this household" description="Attendance and next session at a glance." />{customer.members.length ? <div className="grid gap-4 sm:grid-cols-2">{customer.members.map((member) => <CustomerMemberCard key={member.id} member={member} />)}</div> : <div className="card"><NoDataState entity="linked members" action={canDo('customers.manage') && <Link to="/members/new" className="btn btn-primary"><UserPlus className="size-4" /> Add first member</Link>} /></div>}</div><div className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Recent activity" description="The latest changes across this household." /></div><ActivityTimeline items={activities.slice(0, 5)} />{activities.length > 5 && <button type="button" className="flex w-full items-center justify-center gap-2 border-t border-line px-4 py-3 text-xs font-semibold text-brand-text hover:bg-surface-hover" onClick={() => setTab('activity')}>View full activity <ArrowRight className="size-3.5" /></button>}</div></section><aside className="space-y-5"><div className="card p-4"><SectionHeader title="Relationship record" description="Who to contact and what is agreed." /><dl className="space-y-3 text-sm"><div><dt className="overline">Guardians</dt><dd className="mt-1 text-ink">{[customer.guardianA, customer.guardianB].filter(Boolean).join(' · ') || 'Not recorded'}</dd></div><div><dt className="overline">Next of kin</dt><dd className="mt-1 text-ink">{customer.nokName || 'Not recorded'}{customer.nokPhone && <a href={`tel:${customer.nokPhone}`} className="mt-0.5 block text-xs text-brand-text">{customer.nokPhone}</a>}</dd></div><div><dt className="overline">Contact preferences</dt><dd className="mt-1 text-ink">{customer.consentLabels.length ? customer.consentLabels.join(' · ') : 'No consent preferences recorded'}</dd></div></dl><div className="mt-4 border-t border-line pt-4"><Link to="/members/new" className="btn btn-ghost w-full justify-center"><UserPlus className="size-3.5" /> Add another member</Link></div></div><div className="card p-4"><SectionHeader title="Useful next steps" /><div className="flex flex-col gap-2"><button type="button" className="btn btn-ghost justify-start" onClick={() => customer.email && (window.location.href = `mailto:${customer.email}`)}><Send className="size-4 text-brand-text" /> Send a message <ArrowRight className="ml-auto size-3.5" /></button><Link to="/enrolments" className="btn btn-ghost justify-start"><CalendarDays className="size-4 text-brand-text" /> Review enrolments <ArrowRight className="ml-auto size-3.5" /></Link><Link to="/charges" className="btn btn-ghost justify-start"><ReceiptText className="size-4 text-brand-text" /> Open charges <ArrowRight className="ml-auto size-3.5" /></Link></div></div></aside></div>}
-    {tab === 'members' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Linked members" description="Open a member 360 for attendance, goals, and development history." /></div>{customer.members.length ? <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">{customer.members.map((member) => <CustomerMemberCard key={member.id} member={member} />)}</div> : <NoDataState entity="linked members" />}</section>}
-    {tab === 'activity' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Household activity" description="A joined timeline of payments, contact, attendance, and notes." /></div><ActivityTimeline items={activities} /></section>}
+    {tab === 'overview' && (
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <section className="space-y-5">
+          <div>
+            <SectionHeader title="People in this household" description="Attendance and next session at a glance." />
+            {customer.members.length ? (
+              <div className="grid gap-4 sm:grid-cols-2">{customer.members.map((member) => <CustomerMemberCard key={member.id} member={member} />)}</div>
+            ) : (
+              <div className="card"><NoDataState entity="linked members" action={canDo('customers.manage') && <Link to={`/members/new?customer_id=${encodeURIComponent(customer.id)}`} className="btn btn-primary"><UserPlus className="size-4" /> Add first member</Link>} /></div>
+            )}
+          </div>
+          <div className="card overflow-hidden">
+            <div className="border-b border-line px-4 py-4"><SectionHeader title="Recent activity" description="The latest recorded changes across this household." /></div>
+            <ActivityTimeline items={activities.slice(0, 5)} />
+            {activities.length > 5 && <button type="button" className="flex w-full items-center justify-center gap-2 border-t border-line px-4 py-3 text-xs font-semibold text-brand-text hover:bg-surface-hover" onClick={() => setTab('activity')}>View full activity <ArrowRight className="size-3.5" /></button>}
+          </div>
+        </section>
+        <aside className="space-y-5">
+          <div className="card p-4">
+            <SectionHeader title="Relationship record" description="Who to contact and what is agreed." />
+            <dl className="space-y-3 text-sm">
+              <div><dt className="overline">Guardians</dt><dd className="mt-1 text-ink">{[customer.guardianA, customer.guardianB].filter(Boolean).join(' · ') || 'Not recorded'}</dd></div>
+              <div><dt className="overline">Next of kin</dt><dd className="mt-1 text-ink">{customer.nokName || 'Not recorded'}{customer.nokPhone && <a href={`tel:${customer.nokPhone}`} className="mt-0.5 block text-xs text-brand-text">{customer.nokPhone}</a>}</dd></div>
+              <div><dt className="overline">Current consents</dt><dd className="mt-1 text-ink">{consentSummary ? customer.consents.filter((consent) => consent.status === 'granted').map((consent) => consent.label).join(' · ') : 'No verified current consent'}</dd></div>
+            </dl>
+            <div className="mt-4 border-t border-line pt-4"><Link to={`/members/new?customer_id=${encodeURIComponent(customer.id)}`} className="btn btn-ghost w-full justify-center"><UserPlus className="size-3.5" /> Add another member</Link></div>
+          </div>
+          {canSeeFinance && <div className="card overflow-hidden">
+            <div className="border-b border-line px-4 py-4"><SectionHeader title="Customer charges" description="Actual charge records only; no recurring billing is assumed." /></div>
+            <CustomerChargeList charges={customer.charges.slice(0, 3)} />
+            {customer.charges.length > 3 && <button type="button" className="flex w-full items-center justify-center gap-2 border-t border-line px-4 py-3 text-xs font-semibold text-brand-text" onClick={() => setTab('charges')}>View all charges <ArrowRight className="size-3.5" /></button>}
+          </div>}
+        </aside>
+      </div>
+    )}
+    {tab === 'members' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Linked members" description="Open a member 360 for attendance, goals, and development history." /></div>{customer.members.length ? <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">{customer.members.map((member) => <CustomerMemberCard key={member.id} member={member} />)}</div> : <NoDataState entity="linked members" action={canDo('customers.manage') && <Link to={`/members/new?customer_id=${encodeURIComponent(customer.id)}`} className="btn btn-primary"><UserPlus className="size-4" /> Add member</Link>} />}</section>}
+    {tab === 'consents' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Consent records" description="A grant only applies within its recorded state and expiry. Expired or withdrawn consent is never treated as valid." /></div><CustomerConsentList consents={customer.consents} /></section>}
+    {tab === 'charges' && canSeeFinance && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Customer charges" description="Pending approval · approved · recovered · outstanding debit. Balances count outstanding debits only." /></div><CustomerChargeList charges={customer.charges} /></section>}
+    {tab === 'activity' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Household activity" description="A timeline of recorded attendance and customer-charge events available to your role." /></div><ActivityTimeline items={activities} /></section>}
   </div>;
 }
 
@@ -889,7 +1154,7 @@ export function Member360() {
   const { staff, canDo } = useAuth();
   const demo = demoMode();
   const [profile, setProfile] = useState<MemberProfile | null>(null);
-  const [tab, setTab] = useState<'overview' | 'attendance' | 'development' | 'profile'>('overview');
+  const [tab, setTab] = useState<'overview' | 'attendance' | 'development' | 'enrolments' | 'profile'>('overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -908,13 +1173,13 @@ export function Member360() {
       const member = memberFromDemo(demoMember);
       const attendance = attendanceFromDemo(demoMember);
       const feedback = demoMember.feedback;
-      setProfile({ member, attendance, goals: demoMember.goals, matches: demoMember.matches, feedback, timeline: demoMember.timeline, rankings: demoMember.matches.length ? [{ platform: 'Club ladder', value: 18, asOf: '2026-09-12' }] : [] });
+      setProfile({ member, attendance, enrollments: [], goals: demoMember.goals, matches: demoMember.matches, feedback, timeline: demoMember.timeline, rankings: demoMember.matches.length ? [{ platform: 'Club ladder', value: 18, asOf: '2026-09-12' }] : [] });
       setLoading(false);
       return () => { cancelled = true; };
     }
 
     const load = async () => {
-      const memberQuery: any = supabase.from('mentis_members').select('*,mentis_customers!customer_id_fkey(*)').eq('id', id).limit(1).single();
+      const memberQuery: any = supabase.from('mentis_members').select('id,organization_id,customer_id,name,date_of_birth,nok_name,nok_phone,special_needs_flag,tte_number,member_code,handedness,playing_style,equipment_notes,photo_ref,sports,erased_at,created_at,mentis_customers!customer_id_fkey(id,name,phone,email,nok_name,nok_phone,guardian_a,guardian_b)').eq('id', id).limit(1).single();
       if (staff?.organization_id) memberQuery.eq('organization_id', staff.organization_id);
       const { data: rawMember, error: memberError } = await memberQuery;
       if (memberError) throw new Error(memberError.message);
@@ -924,16 +1189,21 @@ export function Member360() {
         supabase.from('mentis_matches').select('id,played_on,opponent,result,source').eq('member_id', id).order('played_on', { ascending: false }).limit(20),
         supabase.from('mentis_player_feedback').select('id,body,created_at,coach_id').eq('member_id', id).order('created_at', { ascending: false }).limit(20),
         supabase.from('mentis_member_goals').select('id,description,status,target_date,goal_type').eq('member_id', id).order('target_date'),
-        supabase.from('mentis_enrollments').select('status,expected,session_id,mentis_session_occurrences(id,name,start_at,mentis_venues(name))').eq('member_id', id).limit(50),
+        supabase.from('mentis_enrollments').select('id,status,expected,session_id,valid_from,valid_to,source,mentis_session_occurrences(id,name,start_at,mentis_venues(name))').eq('member_id', id).limit(50),
       ]);
       const attendance = normalizeAttendance(attendanceResult.data ?? [], memberFromRaw(rawMember));
       const member = memberFromRaw(rawMember, { attendance: attendanceResult.data ?? [], enrollments: enrollmentResult.data ?? [] });
+      const enrollments: MemberEnrollment[] = (enrollmentResult.data ?? []).map((enrollment: any) => {
+        const session = firstRelation(enrollment.mentis_session_occurrences ?? enrollment.sessions);
+        const venue = firstRelation(session?.mentis_venues ?? session?.venues);
+        return { id: enrollment.id, name: session?.name ?? 'Session enrolment', status: enrollment.status ?? 'active', expected: enrollment.expected !== false, startsAt: session?.start_at ?? null, validFrom: enrollment.valid_from ?? null, validTo: enrollment.valid_to ?? null, venue: venue?.name ?? null };
+      });
       const goals: DemoGoal[] = (goalsResult.data ?? []).map((goal: any) => ({ id: goal.id, description: goal.description, status: goal.status, targetDate: goal.target_date, type: goal.goal_type ?? 'free' }));
       const matches: DemoMatch[] = (matchResult.data ?? []).map((match: any) => ({ id: match.id, date: match.played_on, opponent: match.opponent, result: match.result, event: match.source ?? 'Match' }));
       const feedback = (feedbackResult.data ?? []).map((item: any) => ({ id: item.id, date: item.created_at, body: item.body, coach: item.coach_id ? `Coach ${String(item.coach_id).slice(0, 6)}` : 'Coach' }));
       const rankings = (rankingResult.data ?? []).map((ranking: any) => ({ platform: ranking.platform, value: ranking.rank_value, asOf: ranking.as_of }));
       const timeline = memberActivityFromProfile(member, attendance, goals, feedback);
-      return { member, attendance, goals, matches, feedback, timeline, rankings };
+      return { member, attendance, enrollments, goals, matches, feedback, timeline, rankings };
     };
     load().then((data) => { if (!cancelled) setProfile(data); }).catch((reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'The member record could not be loaded.'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -942,7 +1212,7 @@ export function Member360() {
   if (loading) return <div className="space-y-5"><PageHeader title="Member 360" subtitle="Loading player context…" breadcrumbs={[{ label: 'People' }, { label: 'Members', to: '/members' }]} /><Skeleton className="h-48 rounded-xl" /><SkeletonStatGrid count={4} /><SkeletonList rows={6} /></div>;
   if (error || !profile) return <div className="space-y-5"><PageHeader title="Member 360" subtitle="We could not open this member record." breadcrumbs={[{ label: 'People' }, { label: 'Members', to: '/members' }]} /><div className="card"><ErrorState message={error || 'Member not found.'} onRetry={() => setReloadKey((key) => key + 1)} /></div></div>;
 
-  const { member, attendance, goals, matches, feedback, rankings, timeline } = profile;
+  const { member, attendance, enrollments, goals, matches, feedback, rankings, timeline } = profile;
   const customer = member.customerId ? (demo ? demoCustomerById(member.customerId) : null) : null;
   const nokName = customer?.nokName ?? member.customerNokName;
   const nokPhone = customer?.nokPhone ?? member.customerNokPhone;
@@ -952,16 +1222,17 @@ export function Member360() {
 
   return <div className="space-y-5"><PageHeader eyebrow="People / member 360" title={member.name} subtitle={`${age != null ? `${age} years` : 'Age not set'} · ${member.memberCode} · ${member.customerName ? `linked to ${member.customerName}` : 'no customer linked'}`} breadcrumbs={[{ label: 'People' }, { label: 'Members', to: '/members' }, { label: member.name }]} actions={<><Link to="/members" className="btn btn-ghost"><ArrowLeft className="size-4" /> Roster</Link>{member.customerId && <Link to={`/customers/${member.customerId}`} className="btn btn-ghost"><Users className="size-4" /> Customer 360</Link>}{member.customerEmail && <a href={`mailto:${member.customerEmail}`} className="btn btn-primary"><Mail className="size-4" /> Message</a>}{canDo('customers.manage') && <Link to="/members/new" className="btn btn-ghost"><UserPlus className="size-4" /> Add member</Link>}</>} />
 
-    <div className="card aurora overflow-hidden p-5 sm:p-6"><div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-center gap-4 sm:gap-5"><Avatar name={member.name} size="lg" /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-display text-2xl font-extrabold tracking-[-0.025em] text-ink">{member.name}</h2><MemberStatusBadge member={member} />{member.specialNeedsFlag && <Badge tone="warning" icon={<TriangleAlert />}>Support note</Badge>}</div><p className="mt-1 text-sm text-ink-muted">{member.playingStyle ?? 'Playing style not set'}{member.handedness ? ` · ${member.handedness === 'R' ? 'Right' : 'Left'} handed` : ''}{member.groups.length ? ` · ${member.groups.join(' · ')}` : ''}</p><div className="mt-3 flex flex-wrap gap-2"><span className="badge badge-outline">Member code · {member.memberCode}</span>{member.customerName && <Link to={member.customerId ? `/customers/${member.customerId}` : '#'} className="badge badge-brand"><Users className="size-3" /> {member.customerName}</Link>}{member.alert && <span className="badge badge-warning"><TriangleAlert className="size-3" /> {member.alert}</span>}</div></div></div><div className="flex flex-wrap gap-2 lg:justify-end">{member.customerPhone && <a href={`tel:${member.customerPhone}`} className="btn btn-ghost"><Phone className="size-4" /> Call household</a>}<Link to="/actions/new" className="btn btn-primary"><MessageCircle className="size-4" /> Create follow-up</Link></div></div></div>
+    <div className="card aurora overflow-hidden p-5 sm:p-6"><div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-center gap-4 sm:gap-5"><Avatar name={member.name} size="lg" /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-display text-2xl font-extrabold tracking-[-0.025em] text-ink">{member.name}</h2><MemberStatusBadge member={member} />{member.specialNeedsFlag && <Badge tone="neutral" icon={<ShieldCheck />}>Support note on file</Badge>}</div><p className="mt-1 text-sm text-ink-muted">{member.playingStyle ?? 'Playing style not set'}{member.handedness ? ` · ${member.handedness === 'R' ? 'Right' : 'Left'} handed` : ''}{member.groups.length ? ` · ${member.groups.join(' · ')}` : ''}</p><div className="mt-3 flex flex-wrap gap-2"><span className="badge badge-outline">Member code · {member.memberCode}</span>{member.customerName && <Link to={member.customerId ? `/customers/${member.customerId}` : '#'} className="badge badge-brand"><Users className="size-3" /> {member.customerName}</Link>}{member.alert && <span className="badge badge-warning"><TriangleAlert className="size-3" /> {member.alert}</span>}</div></div></div><div className="flex flex-wrap gap-2 lg:justify-end">{member.customerPhone && <a href={`tel:${member.customerPhone}`} className="btn btn-ghost"><Phone className="size-4" /> Call household</a>}<Link to="/actions/new" className="btn btn-primary"><MessageCircle className="size-4" /> Create follow-up</Link></div></div></div>
 
     <StatGrid><StatCard label="Attendance" value={member.attendancePct} format={(value) => `${Math.round(value)}%`} icon={HeartPulse} tone={member.attendancePct >= 80 ? 'success' : 'warning'} hint={`${member.sessionsAttended} of ${member.sessionsTotal || '—'} recorded`} sparkline={attendance.slice(0, 8).reverse().map((item) => item.status === 'present' ? 100 : item.status === 'late' ? 75 : 15)} /><StatCard label="Sessions attended" value={member.sessionsAttended} icon={CalendarDays} tone="brand" hint={member.nextSession ? `next ${formatDateTime(member.nextSession)}` : 'no upcoming session'} /><StatCard label="Goals in progress" value={goals.filter((goal) => goal.status === 'inProgress').length} icon={Target} tone="info" hint={`${goals.filter((goal) => goal.status === 'achieved').length} achieved`} /><StatCard label="Match win rate" value={matchRate} format={(value) => matches.length ? `${Math.round(value)}%` : '—'} icon={BadgeCheck} tone={matchRate >= 50 ? 'success' : 'neutral'} hint={matches.length ? `${wins} wins from ${matches.length}` : 'no matches recorded'} /></StatGrid>
 
-    <SegmentedControl ariaLabel="Member 360 sections" value={tab} onChange={setTab} options={[{ value: 'overview', label: 'Overview' }, { value: 'attendance', label: 'Attendance', count: attendance.length }, { value: 'development', label: 'Development', count: goals.length + feedback.length }, { value: 'profile', label: 'Profile' }]} />
+    <SegmentedControl ariaLabel="Member 360 sections" value={tab} onChange={(value) => setTab(value as typeof tab)} options={[{ value: 'overview', label: 'Overview' }, { value: 'attendance', label: 'Attendance', count: attendance.length }, { value: 'development', label: 'Development', count: goals.length + feedback.length }, { value: 'enrolments', label: 'Enrolments', count: enrollments.length }, { value: 'profile', label: 'Profile & Safety' }]} />
 
     {tab === 'overview' && <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]"><section className="space-y-5"><div className="card overflow-hidden"><div className="flex items-start justify-between gap-3 border-b border-line px-4 py-4"><SectionHeader title="Attendance pulse" description="Recent register history and the next planned session." /><ProgressRing value={member.attendancePct} max={100} tone={member.attendancePct >= 80 ? 'success' : 'warning'} ariaLabel="Attendance percentage">{member.attendancePct}%</ProgressRing></div><AttendanceList attendance={attendance.slice(0, 5)} />{attendance.length > 5 && <button type="button" className="flex w-full items-center justify-center gap-2 border-t border-line px-4 py-3 text-xs font-semibold text-brand-text hover:bg-surface-hover" onClick={() => setTab('attendance')}>View all attendance <ArrowRight className="size-3.5" /></button>}</div><div className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Goals" description="What the next coaching conversation should move forward." /></div><GoalList goals={goals.slice(0, 4)} />{goals.length > 4 && <button type="button" className="flex w-full items-center justify-center gap-2 border-t border-line px-4 py-3 text-xs font-semibold text-brand-text" onClick={() => setTab('development')}>View all goals <ArrowRight className="size-3.5" /></button>}</div></section><aside className="space-y-5"><div className="card p-4"><SectionHeader title="Household contact" description="The safest route for updates and reminders." /><div className="flex items-center gap-3"><Avatar name={member.customerName} size="md" /><div className="min-w-0"><div className="truncate text-sm font-bold text-ink">{member.customerName ?? 'No linked customer'}</div>{member.customerEmail && <a href={`mailto:${member.customerEmail}`} className="mt-0.5 block truncate text-xs text-brand-text">{member.customerEmail}</a>}{member.customerPhone && <a href={`tel:${member.customerPhone}`} className="mt-0.5 block text-xs text-ink-muted">{member.customerPhone}</a>}</div></div>{(nokName || nokPhone) && <div className="mt-4 rounded-lg bg-surface-inset p-3 text-xs text-ink-muted"><div className="overline">Next of kin</div><div className="mt-1 text-sm text-ink">{nokName ?? 'Not recorded'}</div><div className="mt-0.5">{nokPhone ?? 'No NOK phone'}</div></div>}<div className="mt-4 flex gap-2">{member.customerId && <Link to={`/customers/${member.customerId}`} className="btn btn-ghost btn-sm flex-1">Open customer 360</Link>}{member.customerPhone && <a href={`tel:${member.customerPhone}`} className="btn btn-ghost btn-icon" aria-label="Call household"><Phone className="size-4" /></a>}</div></div><div className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Coach timeline" description="The last few meaningful moments." /></div><ActivityTimeline items={timeline.slice(0, 5)} />{timeline.length === 0 && <EmptyState icon={History} title="No timeline yet" description="Attendance and coach updates will build this view." className="py-6" />}</div></aside></div>}
     {tab === 'attendance' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Attendance history" description="Present, late, and absent records across venues." /></div><AttendanceList attendance={attendance} /></section>}
+    {tab === 'enrolments' && <section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Session enrolments" description="Programme and session registration records only. Membership tags are not billing plans." /></div>{enrollments.length ? <div className="divide-y divide-line">{enrollments.map((enrollment) => <div key={enrollment.id} className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand-text"><CalendarDays className="size-4" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-ink">{enrollment.name}</div><div className="mt-1 text-xs text-ink-muted">{enrollment.startsAt ? formatDateTime(enrollment.startsAt) : 'Schedule not set'}{enrollment.venue ? ` · ${enrollment.venue}` : ''}</div><div className="mt-0.5 text-xs text-ink-faint">{enrollment.validFrom || enrollment.validTo ? `Valid ${enrollment.validFrom ? formatDate(enrollment.validFrom) : 'from start'}–${enrollment.validTo ? formatDate(enrollment.validTo) : 'ongoing'}` : 'No validity dates recorded'}</div></div><div className="flex items-center gap-2"><Badge tone={enrollment.status === 'active' ? 'success' : enrollment.status === 'paused' ? 'warning' : 'neutral'} dot>{enrollment.status}</Badge>{!enrollment.expected && <Badge tone="neutral">Not expected</Badge>}</div></div>)}</div> : <EmptyState icon={CalendarDays} title="No session enrolments recorded" description={demo ? 'This demo member has no enrolment records in the snapshot.' : 'Add this member to a programme or session to create an enrolment record.'} className="py-10" action={<Link to="/enrolments" className="btn btn-primary"><CalendarDays className="size-4" /> Open enrolments</Link>} />}</section>}
     {tab === 'development' && <div className="grid gap-5 lg:grid-cols-2"><section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Goals" description="Progress and target dates." /></div><GoalList goals={goals} /></section><section className="card overflow-hidden"><div className="border-b border-line px-4 py-4"><SectionHeader title="Match form" description="Recent competition and ladder results." /></div>{matches.length ? <div className="divide-y divide-line">{matches.map((match) => <div key={match.id} className="flex items-center gap-3 px-4 py-3"><span className={`grid size-8 place-items-center rounded-xl text-xs font-bold ${match.result === 'W' ? 'bg-success-soft text-success' : match.result === 'L' ? 'bg-danger-soft text-danger' : 'bg-warning-soft text-warning'}`}>{match.result}</span><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-ink">vs {match.opponent}</div><div className="mt-0.5 truncate text-xs text-ink-muted">{match.event}</div></div><span className="text-xs text-ink-faint">{formatDate(match.date, true)}</span></div>)}</div> : <EmptyState icon={BadgeCheck} title="No matches yet" description="Competition results will become part of the player story here." className="py-10" />}</section><section className="card overflow-hidden lg:col-span-2"><div className="border-b border-line px-4 py-4"><SectionHeader title="Coach feedback" description="Keep context from sessions and events in one timeline." /></div>{feedback.length ? <div className="divide-y divide-line">{feedback.map((item) => <div key={item.id} className="px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-2"><span className="badge badge-brand"><NotebookPen className="size-3" /> Coach {item.coach}</span><time className="text-xs text-ink-faint">{formatDate(item.date, true)}</time></div><p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-muted">{item.body}</p></div>)}</div> : <EmptyState icon={NotebookPen} title="No feedback yet" description="Coach notes will show here after a session review is saved." className="py-10" />}</section></div>}
-    {tab === 'profile' && <div className="grid gap-5 lg:grid-cols-2"><section className="card p-5"><SectionHeader title="Player profile" description="The practical details coaches need before a session." /><dl className="grid gap-x-5 gap-y-4 sm:grid-cols-2"><div><dt className="overline">Date of birth</dt><dd className="mt-1 text-sm text-ink">{formatDate(member.dateOfBirth, true)}{age != null && ` · age ${age}`}</dd></div><div><dt className="overline">Member code</dt><dd className="mt-1 text-sm text-ink">{member.memberCode}</dd></div><div><dt className="overline">Handedness</dt><dd className="mt-1 text-sm text-ink">{member.handedness === 'R' ? 'Right' : member.handedness === 'L' ? 'Left' : 'Not set'}</dd></div><div><dt className="overline">Playing style</dt><dd className="mt-1 text-sm text-ink">{member.playingStyle ?? 'Not set'}</dd></div><div className="sm:col-span-2"><dt className="overline">Equipment notes</dt><dd className="mt-1 text-sm leading-relaxed text-ink">{member.equipmentNotes ?? 'No equipment notes.'}</dd></div></dl></section><section className="card p-5"><SectionHeader title="Safety & access" description="Sensitive details are permission-gated and access logged." />{member.specialNeedsFlag ? canDo('medical.view') ? <div className="rounded-lg border border-warning/30 bg-warning-soft p-4"><div className="flex items-center gap-2 text-sm font-bold text-warning"><ShieldCheck className="size-4" /> Support note available</div><p className="mt-2 text-sm leading-relaxed text-ink-muted">Medical or support details are held in the protected record. Open the medical panel from the register to view the logged note.</p></div> : <div className="rounded-lg border border-line bg-surface-inset p-4"><div className="flex items-center gap-2 text-sm font-bold text-ink"><ShieldCheck className="size-4 text-ink-faint" /> Protected support record</div><p className="mt-2 text-sm leading-relaxed text-ink-muted">You can see that a support note exists, but your role cannot view its contents.</p></div> : <EmptyState icon={ShieldCheck} tone="success" title="No support note flagged" description="Nothing sensitive is flagged on this member record." className="py-8" />}</section></div>}
+    {tab === 'profile' && <div className="grid gap-5 lg:grid-cols-2"><section className="card p-5"><SectionHeader title="Player profile" description="The practical details coaches need before a session." /><dl className="grid gap-x-5 gap-y-4 sm:grid-cols-2"><div><dt className="overline">Date of birth</dt><dd className="mt-1 text-sm text-ink">{formatDate(member.dateOfBirth, true)}{age != null && ` · age ${age}`}</dd></div><div><dt className="overline">Member code</dt><dd className="mt-1 text-sm text-ink">{member.memberCode}</dd></div><div><dt className="overline">Handedness</dt><dd className="mt-1 text-sm text-ink">{member.handedness === 'R' ? 'Right' : member.handedness === 'L' ? 'Left' : 'Not set'}</dd></div><div><dt className="overline">Playing style</dt><dd className="mt-1 text-sm text-ink">{member.playingStyle ?? 'Not set'}</dd></div><div className="sm:col-span-2"><dt className="overline">Equipment notes</dt><dd className="mt-1 text-sm leading-relaxed text-ink">{member.equipmentNotes ?? 'No equipment notes.'}</dd></div></dl></section><section className="card p-5"><SectionHeader title="Safety & access" description="Sensitive details are permission-gated and access logged." />{member.specialNeedsFlag ? <div className="rounded-lg border border-line bg-surface-inset p-4"><div className="flex items-center gap-2 text-sm font-semibold text-ink"><ShieldCheck className="size-4 text-ink-faint" /> Support note on file</div><p className="mt-2 text-sm leading-relaxed text-ink-muted">Contents are not shown in the general profile. {canDo('medical.view') ? 'Authorised review is available only through the protected, auditable register workflow.' : 'Your role cannot access the protected note.'}</p></div> : <EmptyState icon={ShieldCheck} tone="success" title="No support note flagged" description="Nothing sensitive is flagged on this member record." className="py-8" />}</section></div>}
 
     {rankings.length > 0 && <div className="card p-4"><div className="flex flex-wrap items-center gap-3"><span className="overline">Rankings</span>{rankings.map((ranking) => <span key={`${ranking.platform}-${ranking.asOf}`} className="badge badge-accent"><BadgeCheck className="size-3" /> {ranking.platform} · #{ranking.value} <span className="opacity-70">{formatDate(ranking.asOf)}</span></span>)}</div></div>}
   </div>;

@@ -29,6 +29,7 @@ Apply these files in exactly this order against a fresh database
 | 20 | `0020_session_roster_templates_seed.sql` | Season roster as blueprints + weekly series (data seed; skipped by the test harness) |
 | 21 | `0021_tagging_system.sql` | Tags and taggable entity links |
 | 22 | `0022_api_role_grants.sql` | Table/sequence/function grants for `anon`, `authenticated`, `service_role` + default privileges — **required, the REST API returns "permission denied for table …" without it** |
+| 27 | `0027_batch_groupings.sql` | First-class cohort/season groupings on weekly patterns, program runs, and sessions; legacy-row backfill, lineage enforcement, RLS, and grouped generation RPCs |
 
 Grants contract: `0000` drops the public schema, which also drops Supabase's
 bootstrap grants for the PostgREST roles. `0000` re-creates the schema-level
