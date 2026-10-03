@@ -15,4 +15,5 @@ export * from './progress';
 export * from './skeleton';
 export * from './stat-card';
 export * from './status-badge';
+export * from './tabs';
 export * from './toast';

@@ -1,18 +1,21 @@
 import { cloneElement, useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   CalendarPlus, CalendarRange, Copy, Layers, Pencil, Play, Plus, RotateCcw,
   Square, Trash2, Undo2, Zap,
 } from 'lucide-react';
 import {
-  describeRecurrence, previewOccurrences, summariseOccurrences, templateCompleteness,
-  type Capacity, type Holiday, type RecurrenceRule, type SessionTemplate, type TemplateStaffingSlot,
+  batchGroupingContainsRange, describeRecurrence, previewOccurrences, summariseOccurrences, templateCompleteness,
+  type BatchGrouping, type Capacity, type Holiday, type RecurrenceRule, type SessionTemplate, type TemplateStaffingSlot,
 } from '@mentis/core';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { demoEnabled } from '../lib/demo';
 import { cn } from '../lib/cn';
 import { PageHeader } from '../components/patterns/page-header';
+import { BatchGroupingField } from '../components/scheduling/BatchGroupingModal';
+import { batchGroupingFromRow, DEMO_BATCH_GROUPINGS } from '../components/scheduling/SchedulingWorkspace';
+import { ProgramRunPlanner } from '../components/scheduling/ProgramRunPlanner';
 import {
   Badge, Button, Card, CardContent, CardHeader, ConfirmDialog, DataTable, Dialog,
   DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -78,7 +81,7 @@ type SeriesRow = {
   venue_id: string;
   venue_name: string;
   starts_on: string;
-  ends_on: string;
+  ends_on: string | null;
   status: 'active' | 'paused' | 'ended';
   frequency: RecurrenceRule['frequency'] | null;
   by_weekday: number[] | null;
@@ -87,6 +90,10 @@ type SeriesRow = {
   exception_count: number;
   cancelled_instances: number;
   next_occurrence_at: string | null;
+  batch_grouping_id: string;
+  batch_grouping_name?: string;
+  batch_grouping_code?: string;
+  batch_grouping_status?: BatchGrouping['status'];
 };
 
 type InstanceRow = {
@@ -95,6 +102,7 @@ type InstanceRow = {
   parent_template_id?: string | null;
   series_id: string | null;
   series_ids?: string[] | null;
+  batch_grouping_id?: string | null;
   name: string;
   start_at: string;
   end_at: string;
@@ -252,18 +260,20 @@ function demoData() {
     { id: 'demo-slot-2', template_id: 'demo-tpl', capacity: 'sparrer', staff_id: null, rate_card_id: null, required: false, lead_minutes: 0, trail_minutes: 0 },
   ];
   const series: SeriesRow[] = [{
-    id: 'demo-series', template_id: 'demo-tpl', template_name: 'U13 Development', label: 'Spring term Mondays',
+    id: 'demo-series', template_id: 'demo-tpl', template_name: 'U13 Development', label: 'Autumn Series',
     venue_id: venueId, venue_name: 'Kingfisher Hall A', starts_on: today(), ends_on: `${today().slice(0, 4)}-12-31`,
     status: 'active', frequency: 'weekly', by_weekday: [1], template_version: 3,
+    batch_grouping_id: DEMO_BATCH_GROUPINGS[0].id, batch_grouping_name: DEMO_BATCH_GROUPINGS[0].name,
+    batch_grouping_code: DEMO_BATCH_GROUPINGS[0].code, batch_grouping_status: DEMO_BATCH_GROUPINGS[0].status,
     instance_count: 10, exception_count: 1, cancelled_instances: 0,
     next_occurrence_at: `${today().slice(0, 8)}15T18:00:00Z`,
   }];
   const instances: InstanceRow[] = [
-    { id: 'demo-i-1', template_id: 'demo-tpl', series_id: 'demo-series', series_ids: ['demo-series'], name: 'U13 Development', start_at: `${today().slice(0, 8)}15T18:00:00Z`, end_at: `${today().slice(0, 8)}15T19:30:00Z`, status: 'scheduled', occurrence_date: `${today().slice(0, 8)}15`, is_exception: true, overridden_fields: ['start_at'], blueprint: { version: 3 } },
-    { id: 'demo-i-2', template_id: 'demo-tpl', series_id: 'demo-series', series_ids: ['demo-series'], name: 'U13 Development', start_at: new Date(Date.now() + 7 * 86400000).toISOString(), end_at: new Date(Date.now() + 7 * 86400000 + 5400000).toISOString(), status: 'scheduled', occurrence_date: null, is_exception: false, overridden_fields: [], blueprint: { version: 3 } },
+    { id: 'demo-i-1', template_id: 'demo-tpl', series_id: 'demo-series', series_ids: ['demo-series'], batch_grouping_id: DEMO_BATCH_GROUPINGS[0].id, name: 'U13 Development', start_at: `${today().slice(0, 8)}15T18:00:00Z`, end_at: `${today().slice(0, 8)}15T19:30:00Z`, status: 'scheduled', occurrence_date: `${today().slice(0, 8)}15`, is_exception: true, overridden_fields: ['start_at'], blueprint: { version: 3 } },
+    { id: 'demo-i-2', template_id: 'demo-tpl', series_id: 'demo-series', series_ids: ['demo-series'], batch_grouping_id: DEMO_BATCH_GROUPINGS[0].id, name: 'U13 Development', start_at: new Date(Date.now() + 7 * 86400000).toISOString(), end_at: new Date(Date.now() + 7 * 86400000 + 5400000).toISOString(), status: 'scheduled', occurrence_date: null, is_exception: false, overridden_fields: [], blueprint: { version: 3 } },
   ];
   return {
-    templates, slots, series, instances,
+    templates, slots, series, instances, batchGroupings: DEMO_BATCH_GROUPINGS,
     venues: [{ id: venueId, name: 'Kingfisher Hall A' }] as VenueRow[],
     staff: [
       { id: coachId, display_name: 'Sam Coach', roles: ['COACH'] },
@@ -285,7 +295,12 @@ function demoData() {
 
 export function SessionTemplates() {
   const { staff, canDo } = useAuth();
+  const { id: routeBlueprintId } = useParams<{ id: string }>();
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [batchGroupings, setBatchGroupings] = useState<BatchGrouping[]>([]);
+  const [batchGroupingId, setBatchGroupingId] = useState('');
+  const [oneOffBatchGroupingId, setOneOffBatchGroupingId] = useState('');
+  const [runName, setRunName] = useState('');
   const [slots, setSlots] = useState<SlotRow[]>([]);
   const [roster, setRoster] = useState<{ template_id: string; member_id: string }[]>([]);
   const [series, setSeries] = useState<SeriesRow[]>([]);
@@ -345,7 +360,7 @@ export function SessionTemplates() {
     if (!staff?.organization_id) return;
     setLoading(true);
     const orgId = staff.organization_id;
-    const [templateRes, seriesRes, instanceRes, venueRes, staffRes, memberRes, cardRes, holidayRes, slotRes, rosterRes, tagTypeRes, tagValueRes] = await Promise.all([
+    const [templateRes, seriesRes, instanceRes, venueRes, staffRes, memberRes, cardRes, holidayRes, slotRes, rosterRes, tagTypeRes, tagValueRes, groupingRes] = await Promise.all([
       supabase.from('session_template_overview').select('*').eq('organization_id', orgId).order('name'),
       supabase.from('session_series_overview').select('*').eq('organization_id', orgId).order('starts_on', { ascending: false }),
       supabase.from('mentis_session_occurrences')
@@ -360,6 +375,7 @@ export function SessionTemplates() {
       supabase.from('mentis_session_template_members').select('template_id,member_id'),
       supabase.from('mentis_tag_types').select('*').eq('organization_id', orgId).eq('is_active', true).in('scope', ['program_template', 'session']).order('sort_order', { ascending: true }),
       supabase.from('mentis_tag_values').select('*').eq('organization_id', orgId).eq('is_active', true).order('sort_order', { ascending: true }),
+      supabase.from('mentis_batch_groupings').select('id,name,code,start_date,end_date,status,description').eq('organization_id', orgId).order('start_date', { ascending: false }),
     ]);
     setTemplates((templateRes.data ?? []) as TemplateRow[]);
     setSeries((seriesRes.data ?? []) as unknown as SeriesRow[]);
@@ -373,6 +389,7 @@ export function SessionTemplates() {
     setRoster((rosterRes.data ?? []) as { template_id: string; member_id: string }[]);
     setTagTypes((tagTypeRes.data ?? []) as any[]);
     setTagValues((tagValueRes.data ?? []) as any[]);
+    setBatchGroupings((groupingRes.data ?? []).map(batchGroupingFromRow));
     setLoading(false);
   };
 
@@ -380,7 +397,7 @@ export function SessionTemplates() {
     if (demoEnabled) {
       const d = demoData();
       setTemplates(d.templates); setSlots(d.slots); setSeries(d.series); setInstances(d.instances);
-      setVenues(d.venues); setStaffList(d.staff); setMembers(d.members); setRateCards(d.rateCards);
+      setBatchGroupings(d.batchGroupings); setVenues(d.venues); setStaffList(d.staff); setMembers(d.members); setRateCards(d.rateCards);
       setHolidays(d.holidays); setLoading(false);
       return;
     }
@@ -406,8 +423,12 @@ export function SessionTemplates() {
   }, [templates, search, venueFilter]);
 
   const selected = useMemo(
-    () => templates.find((t) => t.id === selectedId) ?? filteredTemplates[0] ?? templates[0] ?? null,
-    [templates, filteredTemplates, selectedId],
+    () => templates.find((t) => t.id === routeBlueprintId)
+      ?? templates.find((t) => t.id === selectedId)
+      ?? filteredTemplates[0]
+      ?? templates[0]
+      ?? null,
+    [templates, filteredTemplates, selectedId, routeBlueprintId],
   );
 
   const activeBulkTargets = useMemo(
@@ -453,6 +474,11 @@ export function SessionTemplates() {
     if (targets.length) {
       setSelectedBlueprintIds(Array.from(new Set(targets.map((template) => template.id))));
     }
+    const lastRun = targets.length === 1
+      ? [...series].filter((run) => run.template_id === targets[0].id).sort((a, b) => b.starts_on.localeCompare(a.starts_on))[0]
+      : null;
+    setBatchGroupingId(lastRun?.batch_grouping_id ?? '');
+    setRunName(targets.length === 1 ? targets[0].name : '');
     setPublishOpen(true);
   };
   const slotsFor = (templateId?: string) => slots.filter((s) => s.template_id === templateId);
@@ -461,7 +487,10 @@ export function SessionTemplates() {
   const latestSeriesFor = (templateId?: string) =>
     [...seriesFor(templateId)].sort((a, b) => (b.starts_on ?? '').localeCompare(a.starts_on ?? ''))[0] ?? null;
   const newRuleFor = (template: TemplateRow) => {
+    setSelectedBlueprintIds([template.id]);
     setRuleDraft(emptyRule(template, latestSeriesFor(template.id)));
+    setBatchGroupingId(latestSeriesFor(template.id)?.batch_grouping_id ?? '');
+    setRunName(template.name);
     setPublishOpen(true);
   };
   const instancesFor = (templateId?: string) => instances.filter((i) => i.template_id === templateId);
@@ -688,6 +717,22 @@ export function SessionTemplates() {
   const publishSeries = async () => {
     const generationTargets = activeBulkTargets.length ? activeBulkTargets : selected ? [selected] : [];
     if (!generationTargets.length || saving) return;
+    const grouping = batchGroupings.find((item) => item.id === batchGroupingId);
+    if (!grouping) {
+      toast.error('Select a Batch / Season Grouping before generating program runs');
+      return;
+    }
+    const effectiveEnd = ruleDraft.validTo || (() => {
+      const end = new Date(`${ruleDraft.validFrom || today()}T00:00:00Z`);
+      end.setUTCDate(end.getUTCDate() + Math.max(1, Number(ruleDraft.horizonDays) || 90) - 1);
+      return end.toISOString().slice(0, 10);
+    })();
+    if (!batchGroupingContainsRange(grouping, ruleDraft.validFrom || today(), effectiveEnd)) {
+      toast.error('The selected batch grouping must cover the full run date range', {
+        description: `${grouping.name}: ${grouping.startDate} – ${grouping.endDate}`,
+      });
+      return;
+    }
     setSaving(true);
 
     let createdCount: number[] = [];
@@ -711,13 +756,16 @@ export function SessionTemplates() {
 
         if (demoEnabled) {
           const id = `demo-series-${Date.now()}-${template.id}`;
+          const label = generationTargets.length === 1 ? (runName.trim() || template.name) : template.name;
           setSeries((prev) => [{
-            id, template_id: template.id, template_name: template.name, label: template.name,
+            id, template_id: template.id, template_name: template.name, label,
             venue_id: template.venue_id, venue_name: template.venue_name, starts_on: rule.validFrom,
-            ends_on: rule.validTo ?? rule.validFrom, status: 'active', frequency: rule.frequency,
+            ends_on: rule.validTo ?? effectiveEnd, status: 'active', frequency: rule.frequency,
             by_weekday: rule.byWeekday, template_version: template.version,
             instance_count: previewNew.length, exception_count: 0, cancelled_instances: 0,
             next_occurrence_at: previewNew[0]?.startsAt ?? null,
+            batch_grouping_id: grouping.id, batch_grouping_name: grouping.name,
+            batch_grouping_code: grouping.code, batch_grouping_status: grouping.status,
           }, ...prev]);
           return previewNew.length;
         }
@@ -727,10 +775,14 @@ export function SessionTemplates() {
         let error: { message: string } | null = null;
         try {
           ({ data, error } = await supabase
-            .rpc('instantiate_session_series', {
+            .rpc('instantiate_grouped_session_series', {
               p_template_id: template.id,
               p_rule: payload,
-              p_options: { created_by: staff?.user_id ?? null, label: template.name },
+              p_options: {
+                created_by: staff?.user_id ?? null,
+                label: generationTargets.length === 1 ? (runName.trim() || template.name) : template.name,
+                batch_grouping_id: grouping.id,
+              },
             })
             .abortSignal(timeout));
         } catch (err) {
@@ -763,12 +815,23 @@ export function SessionTemplates() {
 
   const addOneOff = async () => {
     if (!selected || !oneOff.start) return;
+    const grouping = batchGroupings.find((item) => item.id === oneOffBatchGroupingId);
+    if (!grouping) {
+      toast.error('Select a Batch / Season Grouping for this session');
+      return;
+    }
+    if (!batchGroupingContainsRange(grouping, oneOff.start.slice(0, 10), oneOff.start.slice(0, 10))) {
+      toast.error('The session date is outside the selected batch grouping', {
+        description: `${grouping.name}: ${grouping.startDate} – ${grouping.endDate}`,
+      });
+      return;
+    }
     setSaving(true);
     const startAt = new Date(oneOff.start).toISOString();
     if (demoEnabled) {
       const id = `demo-oneoff-${Date.now()}`;
       setInstances((prev) => [{
-        id, template_id: selected.id, series_id: null, name: oneOff.name || selected.name,
+        id, template_id: selected.id, series_id: null, batch_grouping_id: grouping.id, name: oneOff.name || selected.name,
         start_at: startAt, end_at: new Date(Date.parse(startAt) + 5400000).toISOString(),
         status: 'scheduled', occurrence_date: startAt.slice(0, 10), is_exception: false,
         overridden_fields: [], blueprint: { version: selected.version },
@@ -778,13 +841,14 @@ export function SessionTemplates() {
       toast.success('One-off session created from the blueprint');
       return;
     }
-    const { data, error } = await supabase.rpc('instantiate_session', {
+    const { data, error } = await supabase.rpc('instantiate_grouped_session', {
       p_template_id: selected.id,
       p_start_at: startAt,
       p_options: {
         name: oneOff.name || null,
         venue_id: oneOff.venue_id || null,
         created_by: staff?.user_id ?? null,
+        batch_grouping_id: grouping.id,
       },
     });
     setSaving(false);
@@ -1138,7 +1202,13 @@ export function SessionTemplates() {
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <span className="truncate text-[11px] font-medium text-slate-900">{t.name}</span>
+                              <Link
+                                to={`/coaching/blueprints/${t.id}`}
+                                onClick={(event) => event.stopPropagation()}
+                                className="truncate text-[11px] font-medium text-slate-900 hover:underline"
+                              >
+                                {t.name}
+                              </Link>
                               {t.status === 'active' ? (
                                 <span className="inline-flex items-center gap-1 text-[9px] font-medium uppercase tracking-wide text-emerald-700">
                                   <span className="size-1.5 rounded-full bg-emerald-500" /> active
@@ -1212,7 +1282,11 @@ export function SessionTemplates() {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    <Button size="sm" intent="secondary" onClick={() => { setOneOff({ start: '', venue_id: '', name: '' }); setOneOffOpen(true); }}>
+                    <Button size="sm" intent="secondary" onClick={() => {
+                      setOneOff({ start: '', venue_id: '', name: '' });
+                      setOneOffBatchGroupingId(latestSeriesFor(selected.id)?.batch_grouping_id ?? '');
+                      setOneOffOpen(true);
+                    }}>
                       <CalendarPlus className="size-3.5" /> One-off Session
                     </Button>
                     <Button size="sm" intent="ghost" onClick={() => openScheduleEditor([selected])}>
@@ -1331,8 +1405,8 @@ export function SessionTemplates() {
                 <CardHeader>
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-semibold text-slate-800">Sessions</h3>
-                      <div className="text-[10px] text-slate-500">Status, date & time, staffing, attendance, invoicing, actions</div>
+                      <h3 className="text-sm font-semibold text-slate-800">Program Runs (Pipelines)</h3>
+                      <div className="text-[10px] text-slate-500">Runs are grouped by their Batch / Season Grouping; sessions inherit the cohort tag.</div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Button size="sm" intent="ghost" onClick={() => { setDeleteRange({ all: true, from: selected.next_occurrence_at ?? today(), to: selected.next_occurrence_at ?? today() }); setDeleteTarget(seriesFor(selected.id)[0] ?? null); }}>
@@ -1345,44 +1419,11 @@ export function SessionTemplates() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-hidden">
-                    <table className="min-w-full text-left text-xs text-slate-700">
-                      <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                        <tr>
-                          <th className="px-4 py-2">Status</th>
-                          <th className="px-4 py-2">Date & time</th>
-                          <th className="px-4 py-2">Staffing</th>
-                          <th className="px-4 py-2">Attendance</th>
-                          <th className="px-4 py-2">Invoicing</th>
-                          <th className="px-4 py-2 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {seriesFor(selected.id).length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
-                              No active sessions published for this blueprint. Click “Publish Session” to generate session records.
-                            </td>
-                          </tr>
-                        ) : (
-                          seriesFor(selected.id).slice(0, 2).map((session) => (
-                            <tr key={session.id} className="border-t border-slate-200 hover:bg-slate-50">
-                              <td className="px-4 py-3"><span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-medium text-emerald-700">{session.status}</span></td>
-                              <td className="px-4 py-3">{dayLabel(session.next_occurrence_at ?? session.starts_on)}</td>
-                              <td className="px-4 py-3">{session.instance_count} slots</td>
-                              <td className="px-4 py-3">
-                                {session.exception_count ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-medium text-amber-700">{session.exception_count} edited</span> : '—'}
-                              </td>
-                              <td className="px-4 py-3">—</td>
-                              <td className="px-4 py-3 text-right">
-                                <button type="button" className="text-[10px] font-medium text-slate-600 hover:text-slate-900">Open</button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                  <ProgramRunPlanner
+                    runs={seriesFor(selected.id)}
+                    groupings={batchGroupings}
+                    columns={seriesColumns}
+                  />
                 </CardContent>
               </Card>
 
@@ -1720,6 +1761,20 @@ export function SessionTemplates() {
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="space-y-4">
+            <BatchGroupingField
+              value={batchGroupingId}
+              groupings={batchGroupings}
+              organizationId={staff?.organization_id}
+              onChange={setBatchGroupingId}
+              onCreated={(grouping) => setBatchGroupings((current) => [grouping, ...current.filter((item) => item.id !== grouping.id)])}
+              initialStartDate={ruleDraft.validFrom || today()}
+              initialEndDate={ruleDraft.validTo || undefined}
+            />
+            {selectedBlueprintIds.length <= 1 && (
+              <Fielded label="Program run name" required>
+                <Input value={runName} onChange={(event) => setRunName(event.target.value)} placeholder={selected?.name ?? 'Autumn Series'} />
+              </Fielded>
+            )}
             <div className="grid gap-3 md:grid-cols-3">
               <Fielded label="Repeats">
                 <Select value={ruleDraft.frequency} onChange={(e) => setRuleDraft({ ...ruleDraft, frequency: e.target.value as RuleDraft['frequency'] })}>
@@ -1835,7 +1890,7 @@ export function SessionTemplates() {
             <Button intent="ghost" onClick={() => setPublishOpen(false)}>Cancel</Button>
             <Button
               onClick={() => void publishSeries()}
-              disabled={saving || !preview.summary?.generated}
+              disabled={saving || !preview.summary?.generated || !batchGroupingId || (selectedBlueprintIds.length <= 1 && !runName.trim())}
               aria-label={`Publish ${previewNew.length || preview.summary?.generated || 0} instances`}
             >
               {saving ? 'Publishing…' : `Generate ${previewNew.length || preview.summary?.generated || 0} Sessions`}
@@ -1854,6 +1909,13 @@ export function SessionTemplates() {
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="space-y-3">
+            <BatchGroupingField
+              value={oneOffBatchGroupingId}
+              groupings={batchGroupings}
+              organizationId={staff?.organization_id}
+              onChange={setOneOffBatchGroupingId}
+              onCreated={(grouping) => setBatchGroupings((current) => [grouping, ...current.filter((item) => item.id !== grouping.id)])}
+            />
             <Fielded label="Starts" required>
               <Input type="datetime-local" value={oneOff.start} onChange={(e) => setOneOff({ ...oneOff, start: e.target.value })} />
             </Fielded>
@@ -1869,7 +1931,7 @@ export function SessionTemplates() {
           </DialogBody>
           <DialogFooter>
             <Button intent="ghost" onClick={() => setOneOffOpen(false)}>Cancel</Button>
-            <Button onClick={() => void addOneOff()} disabled={saving || !oneOff.start}>Create session</Button>
+            <Button onClick={() => void addOneOff()} disabled={saving || !oneOff.start || !oneOffBatchGroupingId}>Create session</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

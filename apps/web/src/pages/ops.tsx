@@ -26,6 +26,7 @@ import {
   UserPlus,
   Pencil,
 } from 'lucide-react';
+import { batchGroupingContainsRange, type BatchGrouping } from '@mentis/core';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { PageHeader } from '../components/patterns/page-header';
@@ -35,6 +36,8 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter, ReviewAndConfirmBanner, ConfirmDialog } from '../components/ui/dialog';
 import { demoEnabled } from '../lib/demo';
 import { cn } from '../lib/cn';
+import { BatchGroupingField } from '../components/scheduling/BatchGroupingModal';
+import { BatchGroupingFilterBar, BatchGroupingBadge, SessionLineage, batchGroupingFromRow, DEMO_BATCH_GROUPINGS } from '../components/scheduling/SchedulingWorkspace';
 
 // ---------------------------------------------------------------------------
 // Types for the workbook
@@ -2310,6 +2313,8 @@ export function Scheduling() {
   const [holidays, setHolidays] = useState<any[]>([]);
   const [venues, setVenues] = useState<any[]>([]);
   const [allSessions, setAllSessions] = useState<any[]>([]);
+  const [batchGroupings, setBatchGroupings] = useState<BatchGrouping[]>([]);
+  const [selectedBatchGroupingFilter, setSelectedBatchGroupingFilter] = useState('all');
   const [selectedVenueFilter, setSelectedVenueFilter] = useState<string>('all');
   const [sessionSearch, setSessionSearch] = useState('');
   const [sessionStatusFilter, setSessionStatusFilter] = useState<'all' | 'scheduled' | 'completed' | 'cancelled'>('all');
@@ -2327,6 +2332,7 @@ export function Scheduling() {
     start_at: '',
     end_at: '',
     status: 'scheduled',
+    batch_grouping_id: '',
   });
   const [responsibleCoachId, setResponsibleCoachId] = useState('');
   const [leadingCoachId, setLeadingCoachId] = useState('');
@@ -2337,7 +2343,7 @@ export function Scheduling() {
   // Sorting for Scheduling table
   const [tableSortColumn, setTableSortColumn] = useState<'name' | 'venue' | 'start_at' | 'headcount' | 'status'>('start_at');
   const [tableSortDirection, setTableSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [form, setForm] = useState({ name: '', venue_id: '', day_of_week: 2, valid_from: '', valid_to: '', start_time: '18:00', end_time: '19:00' });
+  const [form, setForm] = useState({ name: '', venue_id: '', day_of_week: 2, valid_from: '', valid_to: '', start_time: '18:00', end_time: '19:00', batch_grouping_id: '' });
 
   const toInputDateTime = (iso: string | null | undefined) => {
     if (!iso) return '';
@@ -2350,21 +2356,37 @@ export function Scheduling() {
   const resetSessionForm = () => {
     setEditingSessionId(null);
     setSelectedSessionId(null);
-    setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' });
+    setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled', batch_grouping_id: '' });
   };
 
   const load = async () => {
     const orgId = staff?.organization_id;
-    const [scheduleRes, holidayRes, venueRes, sessionRes, enrollmentRes, staffRes] = await Promise.all([
-      supabase.from('mentis_weekly_schedules').select('*,mentis_venues(name)').eq('organization_id', orgId ?? ''),
+    if (!orgId) return;
+    if (demoEnabled) {
+      setBatchGroupings(DEMO_BATCH_GROUPINGS);
+      return;
+    }
+    const [scheduleRes, holidayRes, venueRes, sessionRes, enrollmentRes, staffRes, groupingRes, runRes, blueprintRes] = await Promise.all([
+      supabase.from('mentis_weekly_schedules').select('*,mentis_venues(name)').eq('organization_id', orgId),
       supabase.from('mentis_holiday_calendar').select('*').order('starts_on'),
-      supabase.from('mentis_venues').select('id,name').eq('organization_id', orgId ?? ''),
-      supabase.from('mentis_sessions').select('id,name,venue_id,status,start_at,end_at,schedule_id,responsible_coach_id,leading_coach_id,assisting_coach_id,mentis_venues(name)').eq('organization_id', orgId ?? '').order('start_at', { ascending: true }),
+      supabase.from('mentis_venues').select('id,name').eq('organization_id', orgId),
+      supabase.from('mentis_sessions').select('id,name,venue_id,status,start_at,end_at,schedule_id,template_id,series_id,batch_grouping_id,responsible_coach_id,leading_coach_id,assisting_coach_id,mentis_venues(name)').eq('organization_id', orgId).order('start_at', { ascending: true }),
       supabase.from('mentis_enrollments').select('session_id'),
-      supabase.from('mentis_staff').select('id,display_name,roles'),
+      supabase.from('mentis_staff').select('id,display_name,roles').eq('organization_id', orgId),
+      supabase.from('mentis_batch_groupings').select('id,name,code,start_date,end_date,status,description').eq('organization_id', orgId).order('start_date', { ascending: false }),
+      supabase.from('mentis_session_series').select('id,label,template_id,batch_grouping_id').eq('organization_id', orgId),
+      supabase.from('mentis_session_templates').select('id,name,code').eq('organization_id', orgId),
     ]);
 
-    setSchedules(scheduleRes.data ?? []);
+    const groupings = (groupingRes.data ?? []).map(batchGroupingFromRow);
+    const groupingById = new Map(groupings.map((grouping) => [grouping.id, grouping]));
+    const runById = new Map((runRes.data ?? []).map((run: any) => [run.id, run]));
+    const blueprintById = new Map((blueprintRes.data ?? []).map((blueprint: any) => [blueprint.id, blueprint]));
+    setBatchGroupings(groupings);
+    setSchedules((scheduleRes.data ?? []).map((row: any) => ({
+      ...row,
+      batch_grouping: groupingById.get(row.batch_grouping_id) ?? null,
+    })));
     setHolidays(holidayRes.data ?? []);
     setVenues(venueRes.data ?? []);
     setStaffList(staffRes.data ?? []);
@@ -2374,13 +2396,20 @@ export function Scheduling() {
       counts.set(row.session_id, (counts.get(row.session_id) ?? 0) + 1);
     });
 
-    const sessions = (sessionRes.data ?? []).map((row: any) => ({
-      ...row,
-      venue_name: row.mentis_venues?.name ?? 'Unknown venue',
-      headcount: counts.get(row.id) ?? 0,
-      start_label: new Date(row.start_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
-      end_label: new Date(row.end_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
-    }));
+    const sessions = (sessionRes.data ?? []).map((row: any) => {
+      const run: any = runById.get(row.series_id);
+      const blueprint: any = blueprintById.get(row.template_id);
+      return {
+        ...row,
+        venue_name: row.mentis_venues?.name ?? 'Unknown venue',
+        batch_grouping: groupingById.get(row.batch_grouping_id) ?? null,
+        blueprint_label: blueprint?.code || blueprint?.name || null,
+        run_label: run?.label || null,
+        headcount: counts.get(row.id) ?? 0,
+        start_label: new Date(row.start_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
+        end_label: new Date(row.end_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
+      };
+    });
 
     setAllSessions(sessions);
     if (!selectedSessionId && sessions.length) {
@@ -2391,13 +2420,48 @@ export function Scheduling() {
   useEffect(() => { if (staff?.organization_id) load(); }, [staff?.organization_id]);
 
   const create = async () => {
+    const grouping = batchGroupings.find((item) => item.id === form.batch_grouping_id);
+    if (!grouping) {
+      alert('Select a Batch / Season Grouping for this weekly pattern.');
+      return;
+    }
+    if (!form.name.trim() || !form.venue_id || !form.valid_from || !form.valid_to) {
+      alert('Complete the pattern name, venue, start date and end date.');
+      return;
+    }
+    if (!batchGroupingContainsRange(grouping, form.valid_from, form.valid_to)) {
+      alert(`The selected grouping must cover the pattern range (${grouping.startDate} – ${grouping.endDate}).`);
+      return;
+    }
+    if (demoEnabled) {
+      setSchedules((current) => [{
+        ...form,
+        id: `demo-weekly-pattern-${Date.now()}`,
+        organization_id: staff?.organization_id,
+        batch_grouping: grouping,
+        mentis_venues: { name: venues.find((venue) => venue.id === form.venue_id)?.name ?? 'Demo venue' },
+      }, ...current]);
+      setForm((current) => ({ ...current, name: '' }));
+      setShowNewScheduling(false);
+      return;
+    }
     const { error } = await supabase.from('mentis_weekly_schedules').insert({ organization_id: staff?.organization_id, ...form });
-    if (error) alert(error.message); else { setForm({ ...form, name: '' }); load(); }
+    if (error) alert(error.message); else { setForm((current) => ({ ...current, name: '' })); setShowNewScheduling(false); load(); }
   };
 
   const saveSession = async () => {
     if (!sessionForm.name.trim() || !sessionForm.venue_id || !sessionForm.start_at || !sessionForm.end_at) {
       alert('Please complete the session name, venue, start time and end time.');
+      return;
+    }
+    const grouping = batchGroupings.find((item) => item.id === sessionForm.batch_grouping_id);
+    if (!grouping) {
+      alert('Select a Batch / Season Grouping for this session.');
+      return;
+    }
+    const sessionDate = sessionForm.start_at.slice(0, 10);
+    if (!batchGroupingContainsRange(grouping, sessionDate, sessionDate)) {
+      alert(`The session date must fall inside ${grouping.name} (${grouping.startDate} – ${grouping.endDate}).`);
       return;
     }
 
@@ -2408,6 +2472,7 @@ export function Scheduling() {
       start_at: new Date(sessionForm.start_at).toISOString(),
       end_at: new Date(sessionForm.end_at).toISOString(),
       status: sessionForm.status,
+      batch_grouping_id: grouping.id,
       responsible_coach_id: responsibleCoachId || null,
       leading_coach_id: leadingCoachId || null,
       assisting_coach_id: assistingCoachId || null,
@@ -2450,6 +2515,7 @@ export function Scheduling() {
       start_at: toInputDateTime(session.start_at),
       end_at: toInputDateTime(session.end_at),
       status: session.status,
+      batch_grouping_id: session.batch_grouping_id ?? '',
     });
     setResponsibleCoachId(session.responsible_coach_id || '');
     setLeadingCoachId(session.leading_coach_id || '');
@@ -2457,24 +2523,59 @@ export function Scheduling() {
   };
 
   const generate = async (sch: any) => {
+    const grouping = batchGroupings.find((item) => item.id === sch.batch_grouping_id);
+    if (!grouping) {
+      alert('This weekly pattern has no Batch / Season Grouping. Assign one before generating sessions.');
+      return;
+    }
+    if (!batchGroupingContainsRange(grouping, sch.valid_from, sch.valid_to)) {
+      alert(`The grouping does not cover the weekly pattern date range (${grouping.startDate} – ${grouping.endDate}).`);
+      return;
+    }
     const out: { date: string }[] = [];
+    const demoRows: any[] = [];
     const d = new Date(`${sch.valid_from}T00:00:00Z`);
     const end = sch.valid_to;
     const skip = (date: string) => holidays.some((h) => date >= h.starts_on && date <= h.ends_on);
     while (d.toISOString().slice(0, 10) <= end) {
       const date = d.toISOString().slice(0, 10);
       if (d.getUTCDay() === sch.day_of_week && !skip(date)) {
-        const { error } = await supabase.from('mentis_sessions').insert({
-          organization_id: staff?.organization_id, venue_id: sch.venue_id, name: sch.name, schedule_id: sch.id,
-          start_at: `${date}T${sch.start_time}:00Z`, end_at: `${date}T${sch.end_time}:00Z`, status: 'scheduled',
-        });
-        if (error) { alert(`Stopped: ${error.message}`); break; }
+        if (demoEnabled) {
+          demoRows.push({
+            id: `demo-session-${sch.id}-${date}`,
+            organization_id: staff?.organization_id,
+            venue_id: sch.venue_id,
+            name: sch.name,
+            schedule_id: sch.id,
+            template_id: sch.template_id ?? null,
+            series_id: null,
+            batch_grouping_id: grouping.id,
+            batch_grouping: grouping,
+            blueprint_label: null,
+            run_label: null,
+            start_at: `${date}T${sch.start_time}:00Z`,
+            end_at: `${date}T${sch.end_time}:00Z`,
+            status: 'scheduled',
+            venue_name: sch.mentis_venues?.name ?? 'Demo venue',
+            headcount: 0,
+            start_label: new Date(`${date}T${sch.start_time}:00Z`).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
+            end_label: new Date(`${date}T${sch.end_time}:00Z`).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }),
+          });
+        } else {
+          const { error } = await supabase.from('mentis_sessions').insert({
+            organization_id: staff?.organization_id, venue_id: sch.venue_id, name: sch.name, schedule_id: sch.id,
+            batch_grouping_id: grouping.id,
+            start_at: `${date}T${sch.start_time}:00Z`, end_at: `${date}T${sch.end_time}:00Z`, status: 'scheduled',
+          });
+          if (error) { alert(`Stopped: ${error.message}`); break; }
+        }
         out.push({ date });
       }
       d.setUTCDate(d.getUTCDate() + 1);
     }
+    if (demoRows.length) setAllSessions((current) => [...demoRows, ...current]);
     alert(`Generated ${out.length} instances (holidays skipped, conflicts blocked at save).`);
-    load();
+    if (!demoEnabled) load();
   };
 
   const filteredSessions = useMemo(() => {
@@ -2482,7 +2583,8 @@ export function Scheduling() {
       const matchesVenue = selectedVenueFilter === 'all' || session.venue_id === selectedVenueFilter;
       const matchesSearch = !sessionSearch.trim() || session.name.toLowerCase().includes(sessionSearch.trim().toLowerCase());
       const matchesStatus = sessionStatusFilter === 'all' || session.status === sessionStatusFilter;
-      return matchesVenue && matchesSearch && matchesStatus;
+      const matchesBatchGrouping = selectedBatchGroupingFilter === 'all' || session.batch_grouping_id === selectedBatchGroupingFilter;
+      return matchesVenue && matchesSearch && matchesStatus && matchesBatchGrouping;
     });
 
     list = [...list].sort((a, b) => {
@@ -2496,7 +2598,7 @@ export function Scheduling() {
     });
 
     return list;
-  }, [allSessions, selectedVenueFilter, sessionSearch, sessionStatusFilter, tableSortColumn, tableSortDirection]);
+  }, [allSessions, selectedVenueFilter, selectedBatchGroupingFilter, sessionSearch, sessionStatusFilter, tableSortColumn, tableSortDirection]);
 
   const selectedSession = useMemo(
     () => allSessions.find(session => session.id === selectedSessionId) ?? filteredSessions[0] ?? null,
@@ -2560,6 +2662,13 @@ export function Scheduling() {
           </div>
         }
       />
+      <div className="mb-4">
+        <BatchGroupingFilterBar
+          groupings={batchGroupings}
+          value={selectedBatchGroupingFilter}
+          onChange={setSelectedBatchGroupingFilter}
+        />
+      </div>
       <Dialog open={showNewScheduling} onOpenChange={(open) => setShowNewScheduling(open)}>
         <DialogContent size="lg">
           <DialogHeader>
@@ -2601,10 +2710,19 @@ export function Scheduling() {
                 <input type="time" className="input mt-1" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} />
               </label>
             </div>
+            <BatchGroupingField
+              value={form.batch_grouping_id}
+              groupings={batchGroupings}
+              organizationId={staff?.organization_id}
+              onChange={(id) => setForm((current) => ({ ...current, batch_grouping_id: id }))}
+              onCreated={(grouping) => setBatchGroupings((current) => [grouping, ...current.filter((item) => item.id !== grouping.id)])}
+              initialStartDate={form.valid_from || undefined}
+              initialEndDate={form.valid_to || undefined}
+            />
           </DialogBody>
           <DialogFooter>
             <button className="btn btn-ghost" onClick={() => setShowNewScheduling(false)}>Close</button>
-            <button className="btn btn-primary" onClick={() => { create(); setShowNewScheduling(false); }}>Create pattern</button>
+            <button className="btn btn-primary" onClick={() => void create()}>Create pattern</button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2647,8 +2765,9 @@ export function Scheduling() {
                       <div key={s.id} className="flex flex-col gap-2 rounded-xl border border-line bg-surface-inset/30 p-3 md:flex-row md:items-center md:justify-between">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-ink">{s.name}</div>
-                          <div className="text-[11px] text-ink-faint">
-                            {s.mentis_venues?.name} · {s.valid_from} → {s.valid_to}
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-faint">
+                            <span>{s.mentis_venues?.name} · {s.valid_from} → {s.valid_to}</span>
+                            <BatchGroupingBadge grouping={s.batch_grouping} />
                           </div>
                         </div>
                         <button className="btn btn-ghost btn-sm whitespace-nowrap" onClick={() => generate(s)}>
@@ -2744,6 +2863,17 @@ export function Scheduling() {
               </label>
             </div>
 
+            <BatchGroupingField
+              value={sessionForm.batch_grouping_id}
+              groupings={batchGroupings}
+              organizationId={staff?.organization_id}
+              onChange={(id) => setSessionForm((current) => ({ ...current, batch_grouping_id: id }))}
+              onCreated={(grouping) => setBatchGroupings((current) => [grouping, ...current.filter((item) => item.id !== grouping.id)])}
+              initialStartDate={sessionForm.start_at.slice(0, 10) || undefined}
+              initialEndDate={sessionForm.start_at.slice(0, 10) || undefined}
+              disabled={Boolean(allSessions.find((session) => session.id === editingSessionId)?.series_id || allSessions.find((session) => session.id === editingSessionId)?.schedule_id)}
+            />
+
             {/* Coach Assignment Placeholders */}
             <div className="rounded-lg border border-line bg-surface-inset p-3 space-y-3">
               <div className="text-xs font-bold text-ink uppercase tracking-wide">Coach Placeholders & Staffing</div>
@@ -2782,7 +2912,7 @@ export function Scheduling() {
             </label>
           </DialogBody>
           <DialogFooter>
-            <button className="btn btn-ghost" onClick={() => { setShowNewSession(false); setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' }); }}>Clear</button>
+            <button className="btn btn-ghost" onClick={() => { setShowNewSession(false); setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled', batch_grouping_id: '' }); }}>Clear</button>
             <button className="btn btn-primary" onClick={saveSession}>Create session</button>
           </DialogFooter>
         </DialogContent>
@@ -2816,7 +2946,10 @@ export function Scheduling() {
               className="btn btn-primary"
               onClick={() => {
                 setEditingSessionId(null);
-                setSessionForm({ name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled' });
+                setSessionForm({
+                  name: '', venue_id: '', start_at: '', end_at: '', status: 'scheduled',
+                  batch_grouping_id: selectedBatchGroupingFilter === 'all' ? '' : selectedBatchGroupingFilter,
+                });
                 setShowNewSession(true);
               }}
             >
@@ -2913,7 +3046,14 @@ export function Scheduling() {
                           />
                         </td>
                       )}
-                      <td className="px-3 py-2 font-medium">{session.name}</td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="font-medium">{session.name}</div>
+                        <SessionLineage
+                          grouping={session.batch_grouping}
+                          blueprint={session.blueprint_label}
+                          run={session.run_label}
+                        />
+                      </td>
                       <td className="px-3 py-2">
                         <div>{session.start_label}</div>
                         <div className="text-ink-muted">→ {session.end_label}</div>

@@ -37,6 +37,12 @@ export type SessionStatus = 'scheduled' | 'cancelled' | 'postponed' | 'completed
 export interface Session {
   id: string; organizationId: string; venueId: string; name: string;
   startAt: string; endAt: string; status: SessionStatus;
+  /** Every session belongs to a season/cohort, including migrated legacy rows. */
+  batchGroupingId: string;
+  /** Present when the session was generated from a concrete program run. */
+  programRunId?: string | null;
+  /** Present when the session was generated from a program blueprint. */
+  blueprintId?: string | null;
   levelBand?: string; capacity?: number; scheduleId?: string;
   cancelReason?: string;
 }

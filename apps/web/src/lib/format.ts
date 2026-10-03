@@ -31,6 +31,12 @@ export const timeShort = (d: string | number | Date | null | undefined) =>
 export const timeRange = (start: string | number | Date | null | undefined, end?: string | number | Date | null) =>
   end ? `${timeShort(start)} – ${timeShort(end)}` : timeShort(start);
 
+/** Date-only key in the user's local timezone, avoiding UTC date shifts. */
+export function localDateKey(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 /** Duration between two stamps, as "1h 45m". */
 export function durationBetween(start: string | Date, end: string | Date) {
   const mins = Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000));

@@ -68,6 +68,7 @@ describe('postgres migrations + RLS matrix', () => {
         '0019_coach_qualifications.sql',
         '0021_tagging_system.sql',
         '0022_api_role_grants.sql',
+        '0027_batch_groupings.sql',
       ];
 
       expect(requiredFiles.length).toBeGreaterThan(0);

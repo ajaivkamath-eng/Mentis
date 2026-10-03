@@ -4,14 +4,19 @@ import { Protected, Shell } from './lib/ui';
 import { Login, Dashboard, SearchPage, Users, Settings, Reports } from './pages/admin';
 import { Today, Register, Feedback } from './pages/coaching';
 import { Members, Member360, Customers, Customer360, Tasters } from './pages/entities';
+import { PeopleWorkspace } from './pages/PeopleWorkspace';
+import { AddMemberWizard } from './pages/AddMemberWizard';
+import { AddCustomerWizard } from './pages/AddCustomerWizard';
 import { Sessions, Scheduling, Tasks, Inbox } from './pages/ops';
 import { SessionTemplates } from './pages/templates';
+import { SchedulingWorkspace } from './pages/SchedulingWorkspace';
+import { ProgramRunPlannerPage } from './pages/ProgramRunPlanner';
 import { Billing, Timesheet, Charges, Reconciliation } from './pages/billing';
 import { Events, MatchEntry, RankingEntry, Goals, Analytics } from './pages/comp';
 import { PublicTaster, PublicDiary, Microflow, Booking12 } from './pages/public';
 import { Venues, Groups, RateCards, Holidays, Overrides, ActionTimelines, Devices, AuditViewer } from './pages/manage';
 import { Importer } from './pages/importer';
-import { MemberForm, CustomerForm, Enrolments, CoachProfile } from './pages/people';
+import { Enrolments, CoachProfile } from './pages/people';
 import { Staffing, SessionClose } from './pages/staffing';
 import { Availability } from './pages/availability';
 import { ActionCreate } from './pages/actions';
@@ -69,11 +74,12 @@ export default function App() {
             <Route path="/profile" element={P('staff.self', <CoachProfile />)} />
             <Route path="/register/:id" element={P('attendance.view', <Register />)} />
             <Route path="/feedback/:source/:id" element={P('events.manage', <Feedback />)} />
+            <Route path="/people" element={P('customers.view', <PeopleWorkspace />)} />
             <Route path="/members" element={P('customers.view', <Members />)} />
-            <Route path="/members/new" element={P('customers.manage', <MemberForm />)} />
+            <Route path="/members/new" element={P('customers.manage', <AddMemberWizard />)} />
             <Route path="/members/:id" element={P('customers.view', <Member360 />)} />
             <Route path="/customers" element={P('customers.view', <Customers />)} />
-            <Route path="/customers/new" element={P('customers.manage', <CustomerForm />)} />
+            <Route path="/customers/new" element={P('customers.manage', <AddCustomerWizard />)} />
             <Route path="/customers/:id" element={P('customers.view', <Customer360 />)} />
             <Route path="/enrolments" element={P('sessions.manage', <Enrolments />)} />
             <Route path="/tasters" element={P('tasters.manage', <Tasters />)} />
@@ -81,7 +87,9 @@ export default function App() {
             <Route path="/programs" element={P('sessions.manage', <Sessions />)} />
             <Route path="/program-runs" element={P('sessions.manage', <Sessions />)} />
             <Route path="/scheduling" element={P('sessions.manage', <Scheduling />)} />
+            <Route path="/coaching/scheduling" element={P('sessions.manage', <SchedulingWorkspace />)} />
             <Route path="/program-blueprints" element={P('sessions.manage', <SessionTemplates />)} />
+            <Route path="/coaching/blueprints/:id" element={P('sessions.manage', <ProgramRunPlannerPage />)} />
             <Route path="/templates" element={P('sessions.manage', <SessionTemplates />)} />
             <Route path="/overrides" element={P('sessions.manage', <Overrides />)} />
             <Route path="/holidays" element={P('sessions.manage', <Holidays />)} />
