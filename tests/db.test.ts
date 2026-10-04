@@ -91,6 +91,11 @@ describe('postgres migrations + RLS matrix', () => {
         where id = '00000000-0000-0000-0000-000000000113'`);
       expect(converted.rows).toEqual([{ availability_type: 'vacation', reason: 'Vacation' }]);
       await db.exec(readFileSync(resolve(MIG, '0026_restore_staff_vacation.sql'), 'utf8'));
+      await db.exec(readFileSync(resolve(MIG, '0027_diary_occurrence_metadata.sql'), 'utf8'));
+      const diaryMetadata = await db.query<{ all_day: boolean; occurrence_start_time: string | null }>(`
+        select all_day, occurrence_start_time from mentis_staff_availability
+        where id = '00000000-0000-0000-0000-000000000113'`);
+      expect(diaryMetadata.rows).toEqual([{ all_day: false, occurrence_start_time: null }]);
       await db.exec(`update mentis_staff_availability set availability_type = 'vacation'
         where id = '00000000-0000-0000-0000-000000000113'`);
       const vacation = await db.query<{ availability_type: string }>(`

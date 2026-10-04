@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { X } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
-export interface Anchor { x: number; y: number }
+export interface Anchor { x: number; y: number; currentTarget?: EventTarget | null }
 
 export function FloatingCard({
   anchor, onClose, children, className, width = 320, label,

@@ -35,12 +35,18 @@ export function EventBlock({
     <div
       data-event-id={ev.id}
       role="button"
-      tabIndex={-1}
-      aria-label={`${ev.title}, ${fmtTimeRange(ev.start, ev.end)}`}
+      tabIndex={0}
+      aria-label={`${ev.title}, ${fmtTimeRange(ev.start, ev.end)}${system ? ', system booking, read only' : ''}`}
       title={tooltip(ev)}
       onDoubleClick={onDoubleClick}
       onPointerDown={onPointerDown}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick?.(e as unknown as React.MouseEvent);
+        }
+      }}
       className={cn(
         'group/event relative flex h-full w-full cursor-pointer flex-col overflow-hidden rounded-md px-1.5 text-left',
         'border border-transparent transition-[filter,box-shadow] duration-100 hover:brightness-[0.99]',
@@ -114,13 +120,14 @@ function tooltip(ev: DiaryEvent): string {
 }
 
 /** Tiny chip for month/agenda/resource views. */
-export function EventChip({ ev, onClick, showStaff }: { ev: DiaryEvent; onClick?: (e: React.MouseEvent) => void; showStaff?: boolean }) {
+export function EventChip({ ev, onClick, onDoubleClick, showStaff }: { ev: DiaryEvent; onClick?: (e: React.MouseEvent) => void; onDoubleClick?: (e: React.MouseEvent) => void; showStaff?: boolean }) {
   const style = kindStyle(ev);
   const conflict = ev.conflictStatus === 'open' || ev.conflictStatus === 'acknowledged';
   return (
     <button
       type="button"
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       className={cn(
         'flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-95',
         ev.kind === 'session' ? 'text-white' : 'text-ink',
@@ -134,8 +141,7 @@ export function EventChip({ ev, onClick, showStaff }: { ev: DiaryEvent; onClick?
       <span className="tabular-nums opacity-75">{new Date(ev.start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>
       <span className="truncate font-semibold">{ev.title}</span>
       {showStaff && ev.staffName && <span className="ml-auto shrink-0 rounded bg-black/10 px-1 text-[9px] font-bold uppercase">{ev.staffName.split(' ').pop()}</span>}
-      {ev.system && <Copy className="ml-auto hidden size-3" aria-hidden />}
-      {!ev.system && <Link2 className="hidden" aria-hidden />}
+      {ev.system && <Lock className="ml-auto size-3 shrink-0 opacity-70" aria-label="System generated" />}
     </button>
   );
 }

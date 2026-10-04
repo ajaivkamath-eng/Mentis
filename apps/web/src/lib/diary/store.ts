@@ -58,11 +58,13 @@ export interface DiaryState {
   staff: StaffOption[];
   meId: string;
   loading: boolean;
+  error?: string | null;
   range: { from: string; to: string };
 }
 
 export interface DiaryOps {
   refresh(): Promise<void>;
+  loadRange(from: Date, to: Date): Promise<void>;
   createEntry(draft: EntryDraft): Promise<DiaryEvent | null>;
   updateEntry(id: string, patch: Partial<EntryDraft>): Promise<void>;
   deleteEntries(ids: string[]): Promise<void>;
@@ -188,6 +190,7 @@ function createDemoStore(): DiaryOps & { state(): DiaryState; version: number; b
     }),
 
     refresh: async () => { bump(); },
+    loadRange: async () => {},
 
     createEntry: async (draft: EntryDraft): Promise<DiaryEvent | null> => {
       const created: DiaryEvent[] = [];
@@ -237,21 +240,25 @@ function createDemoStore(): DiaryOps & { state(): DiaryState; version: number; b
     updateEntry: async (id: string, patch: Partial<EntryDraft>) => {
       const prev = events.get(id);
       if (!prev) return;
+      const plannerKey = prev.sourceType === 'planner'
+        ? `${prev.ruleId}|${dateKey(new Date(prev.start))}|${prev.start.slice(11, 16)}`
+        : null;
+      const previousSuppression = plannerKey ? suppress.get(plannerKey) : undefined;
+      const current = previousSuppression && typeof previousSuppression === 'object' ? previousSuppression : prev;
       const next: DiaryEvent = {
-        ...prev,
-        title: patch.title ?? prev.title,
-        kind: patch.kind ?? prev.kind,
-        start: patch.start ? patch.start.toISOString() : prev.start,
-        end: patch.end ? patch.end.toISOString() : prev.end,
-        allDay: patch.allDay ?? prev.allDay,
-        notes: patch.notes ?? prev.notes,
-        visibility: patch.visibility ?? prev.visibility,
-        staffId: patch.staffId ?? prev.staffId,
+        ...current,
+        title: patch.title ?? current.title,
+        kind: patch.kind ?? current.kind,
+        start: patch.start ? patch.start.toISOString() : current.start,
+        end: patch.end ? patch.end.toISOString() : current.end,
+        allDay: patch.allDay ?? current.allDay,
+        notes: patch.notes ?? current.notes,
+        visibility: patch.visibility ?? current.visibility,
+        staffId: patch.staffId ?? current.staffId,
       };
-      if (prev.sourceType === 'planner') {
+      if (plannerKey) {
         // Single-occurrence exception: never mutate the pattern itself.
-        const key = `${prev.ruleId}|${dateKey(new Date(prev.start))}|${prev.start.slice(11, 16)}`;
-        suppress.set(key, { ...next, sourceType: 'manual', system: false, exceptionStatus: 'exception' });
+        suppress.set(plannerKey, { ...next, sourceType: 'planner', system: true, exceptionStatus: 'exception' });
       } else {
         events.set(id, next);
       }
@@ -259,12 +266,14 @@ function createDemoStore(): DiaryOps & { state(): DiaryState; version: number; b
       pushHistory({
         label: 'edit entry',
         undo: () => {
-          if (prev.sourceType === 'planner') suppress.delete(`${prev.ruleId}|${dateKey(new Date(prev.start))}|${prev.start.slice(11, 16)}`);
-          else events.set(id, prev);
+          if (plannerKey) {
+            if (previousSuppression === undefined) suppress.delete(plannerKey);
+            else suppress.set(plannerKey, previousSuppression);
+          } else events.set(id, prev);
           recomputeConflicts(); bump();
         },
         redo: () => {
-          if (prev.sourceType === 'planner') suppress.set(`${prev.ruleId}|${dateKey(new Date(prev.start))}|${prev.start.slice(11, 16)}`, { ...next, sourceType: 'manual', system: false, exceptionStatus: 'exception' });
+          if (plannerKey) suppress.set(plannerKey, { ...next, sourceType: 'planner', system: true, exceptionStatus: 'exception' });
           else events.set(id, next);
           recomputeConflicts(); bump();
         },
@@ -273,17 +282,16 @@ function createDemoStore(): DiaryOps & { state(): DiaryState; version: number; b
     },
 
     deleteEntries: async (ids: string[]) => {
-      const removed: DiaryEvent[] = [];
-      const removedKeys: string[] = [];
+      const removed: { event: DiaryEvent; key?: string; previousSuppression?: 'remove' | DiaryEvent }[] = [];
       for (const id of ids) {
-        const ev = events.get(id);
-        if (!ev) continue;
-        removed.push(ev);
-        if (ev.sourceType === 'planner') {
-          const key = `${ev.ruleId}|${dateKey(new Date(ev.start))}|${ev.start.slice(11, 16)}`;
+        const event = events.get(id);
+        if (!event) continue;
+        if (event.sourceType === 'planner') {
+          const key = `${event.ruleId}|${dateKey(new Date(event.start))}|${event.start.slice(11, 16)}`;
+          removed.push({ event, key, previousSuppression: suppress.get(key) });
           suppress.set(key, 'remove');
-          removedKeys.push(key);
         } else {
+          removed.push({ event });
           events.delete(id);
         }
       }
@@ -291,16 +299,18 @@ function createDemoStore(): DiaryOps & { state(): DiaryState; version: number; b
       pushHistory({
         label: 'delete entries',
         undo: () => {
-          for (const ev of removed) {
-            if (ev.sourceType === 'planner') suppress.delete(`${ev.ruleId}|${dateKey(new Date(ev.start))}|${ev.start.slice(11, 16)}`);
-            else events.set(ev.id, ev);
+          for (const item of removed) {
+            if (item.key) {
+              if (item.previousSuppression === undefined) suppress.delete(item.key);
+              else suppress.set(item.key, item.previousSuppression);
+            } else events.set(item.event.id, item.event);
           }
           recomputeConflicts(); bump();
         },
         redo: () => {
-          for (const ev of removed) {
-            if (ev.sourceType === 'planner') suppress.set(`${ev.ruleId}|${dateKey(new Date(ev.start))}|${ev.start.slice(11, 16)}`, 'remove');
-            else events.delete(ev.id);
+          for (const item of removed) {
+            if (item.key) suppress.set(item.key, 'remove');
+            else events.delete(item.event.id);
           }
           recomputeConflicts(); bump();
         },
@@ -418,20 +428,32 @@ function createDemoStore(): DiaryOps & { state(): DiaryState; version: number; b
 
 type AnyRow = Record<string, any>;
 
-async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState> {
-  const fromIso = new Date(Date.now() - 40 * 86400000).toISOString();
-  const toIso = new Date(Date.now() + 75 * 86400000).toISOString();
-
-  const [staffRes, availRes, rulesRes, conflictsRes] = await Promise.all([
+async function loadLive(meOrgId: string, staffIds: string[], range: { from: string; to: string }): Promise<DiaryState> {
+  const fromDate = new Date(`${range.from}T00:00:00`);
+  const toDate = new Date(`${range.to}T00:00:00`);
+  toDate.setDate(toDate.getDate() + 1); // PostgREST end is exclusive.
+  const fromIso = fromDate.toISOString();
+  const toIso = toDate.toISOString();
+  const exceptionFrom = range.from;
+  const exceptionTo = range.to;
+  const staffFilter = staffIds.length ? staffIds : ['00000000-0000-0000-0000-000000000000'];
+  const [staffRes, availRes, exceptionsRes, rulesRes, conflictsRes] = await Promise.all([
     supabase.from('mentis_staff').select('id, display_name, roles'),
     supabase.from('mentis_staff_availability').select('*, mentis_staff!staff_availability_staff_id_fkey(display_name)')
-      .in('staff_id', staffIds.length ? staffIds : ['00000000-0000-0000-0000-000000000000'])
-      .gte('starts_at', fromIso).lte('starts_at', toIso).limit(2000),
-    supabase.from('mentis_availability_rules').select('*').in('staff_id', staffIds.length ? staffIds : ['00000000-0000-0000-0000-000000000000']),
+      .in('staff_id', staffFilter)
+      .lt('starts_at', toIso).gt('ends_at', fromIso).limit(2000),
+    // A moved exception can now start outside its source occurrence's date
+    // window. Fetch by the original occurrence date too, so its virtual block
+    // is suppressed even when the replacement was moved elsewhere.
+    supabase.from('mentis_staff_availability').select('id, staff_id, rule_id, occurrence_date, occurrence_start_time, starts_at, source_type')
+      .in('staff_id', staffFilter).eq('source_type', 'planner').not('occurrence_date', 'is', null)
+      .gte('occurrence_date', exceptionFrom).lte('occurrence_date', exceptionTo).limit(2000),
+    supabase.from('mentis_availability_rules').select('*').in('staff_id', staffFilter),
     supabase.from('mentis_diary_conflicts').select('*').neq('status', 'resolved')
-      .in('staff_id', staffIds.length ? staffIds : ['00000000-0000-0000-0000-000000000000']).limit(200),
+      .in('staff_id', staffFilter).limit(200),
   ]);
   if (availRes.error) throw availRes.error;
+  if (exceptionsRes.error) throw exceptionsRes.error;
 
   const staffList: StaffOption[] = (staffRes.data ?? []).map((s: AnyRow) => ({
     id: s.id, name: s.display_name, roles: s.roles ?? [], initials: initialsOf(s.display_name),
@@ -450,7 +472,7 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
     events.push({
       id: r.id, staffId: r.staff_id, staffName: r.mentis_staff?.display_name ?? nameOf(r.staff_id),
       title: r.title || r.reason || KIND[kind].label, kind,
-      start: r.starts_at, end: r.ends_at, allDay: false,
+      start: r.starts_at, end: r.ends_at, allDay: Boolean(r.all_day),
       notes: r.reason, sourceType: (r.source_type ?? 'manual') as DiarySourceType,
       ruleId: r.rule_id ?? null, system: r.source_type === 'planner',
       exceptionStatus: r.exception_status ?? 'none',
@@ -459,9 +481,9 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
     });
   }
 
-  // Sessions (partial allocations included) + tasks, clipped to the window.
-  const sessFrom = new Date(Date.now() - 10 * 86400000).toISOString();
-  const sessTo = new Date(Date.now() + 45 * 86400000).toISOString();
+  // Sessions (partial allocations included) + tasks, clipped to the visible range.
+  const sessFrom = fromIso;
+  const sessTo = toIso;
   const [staffingRes, ratesRes, tasksRes] = await Promise.all([
     supabase.from('mentis_session_staffing').select(`
       id, session_id, staff_id, capacity, planned_start, planned_end,
@@ -504,7 +526,7 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
     events.push({
       id: t.id, staffId: t.assignee_id, staffName: nameOf(t.assignee_id),
       title: t.title, kind: 'task', start: start.toISOString(), end: end.toISOString(),
-      sourceType: 'task', sourceId: t.id, system: true,
+      sourceType: 'task', sourceId: t.id, system: true, linkTo: `/tasks?task=${encodeURIComponent(t.id)}`,
       chargeable: (t.amount_cents ?? 0) > 0, rateCents: rate?.rate_cents ?? null, rateLabel: rate?.label ?? null,
     });
   }
@@ -515,7 +537,7 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
     effectiveFrom: r.effective_from, effectiveTo: r.effective_to ?? null,
     scope: r.scope ?? 'indefinite', isActive: r.is_active ?? true,
   }));
-  const window = { from: dateKey(new Date(Date.now() - 40 * 86400000)), to: dateKey(new Date(Date.now() + 75 * 86400000)) };
+  const window = range;
   for (const rule of rules) {
     for (const g of expandAvailabilityPattern(rule, window.from, window.to)) {
       events.push({
@@ -528,13 +550,21 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
   }
 
   // Suppress occurrences that carry an exception row.
-  const exceptions = (availRes.data ?? []).filter((r: AnyRow) => r.rule_id && r.occurrence_date && r.source_type === 'planner');
+  const exceptions = (exceptionsRes.data ?? []).filter((r: AnyRow) => r.rule_id && r.occurrence_date && r.source_type === 'planner');
   const events2 = events.filter((e) => {
     if (!e.id.startsWith('gen:')) return true;
-    return !exceptions.some((x: AnyRow) =>
-      x.rule_id === e.ruleId
-      && x.occurrence_date === e.start.slice(0, 10)
-      && (x.starts_at ?? '').slice(11, 16) === e.start.slice(11, 16));
+    const occurrence = new Date(e.start);
+    const occurrenceDate = dateKey(occurrence);
+    const occurrenceTime = `${String(occurrence.getHours()).padStart(2, '0')}:${String(occurrence.getMinutes()).padStart(2, '0')}`;
+    return !exceptions.some((x: AnyRow) => {
+      const sourceTime = x.occurrence_start_time
+        ? String(x.occurrence_start_time).slice(0, 5)
+        : (() => {
+          const start = new Date(x.starts_at);
+          return `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+        })();
+      return x.rule_id === e.ruleId && x.occurrence_date === occurrenceDate && sourceTime === occurrenceTime;
+    });
   });
 
   const conflicts: ConflictRecord[] = [];
@@ -543,8 +573,8 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
     const assignment = events2.find((e) => e.id === c.staffing_id || (e.kind === 'task' && e.id === c.task_id));
     if (!blocker || !assignment) continue;
     conflicts.push({
-      staffId: c.staff_id, staffName: blocker.staffName, blocker, assignment,
-      overlapMinutes: c.overlap_minutes, message: c.message,
+      id: c.id, status: c.status, staffId: c.staff_id, staffName: blocker.staffName,
+      blocker, assignment, overlapMinutes: c.overlap_minutes, message: c.message,
     });
     blocker.conflictStatus = c.status; assignment.conflictStatus = c.status;
   }
@@ -555,8 +585,37 @@ async function loadLive(meOrgId: string, staffIds: string[]): Promise<DiaryState
   };
 }
 
+function occurrenceDates(draft: EntryDraft): { start: Date; end: Date }[] {
+  const occurrences = [{ start: new Date(draft.start), end: new Date(draft.end) }];
+  if (!draft.repeat?.weekdays.length || !draft.repeat.until) return occurrences;
+  const duration = draft.end.getTime() - draft.start.getTime();
+  const allDaySpan = draft.allDay
+    ? Math.max(0, Math.round((new Date(draft.end.getFullYear(), draft.end.getMonth(), draft.end.getDate()).getTime()
+      - new Date(draft.start.getFullYear(), draft.start.getMonth(), draft.start.getDate()).getTime()) / 86_400_000))
+    : 0;
+  const until = new Date(`${draft.repeat.until}T23:59:59`);
+  let cursor = addDays(new Date(draft.start.getFullYear(), draft.start.getMonth(), draft.start.getDate()), 1);
+  let count = 0;
+  while (cursor <= until && count < 60) {
+    const weekday = ((cursor.getDay() + 6) % 7 + 1) as IsoWeekday;
+    if (draft.repeat.weekdays.includes(weekday)) {
+      const start = new Date(cursor);
+      start.setHours(draft.start.getHours(), draft.start.getMinutes(), draft.start.getSeconds(), 0);
+      const end = draft.allDay
+        ? (() => { const dayEnd = new Date(start); dayEnd.setDate(dayEnd.getDate() + allDaySpan); dayEnd.setHours(23, 59, 0, 0); return dayEnd; })()
+        : new Date(start.getTime() + duration);
+      occurrences.push({ start, end });
+      count += 1;
+    }
+    cursor = addDays(cursor, 1);
+  }
+  return occurrences;
+}
+
 function createLiveStore(meStaffId: string, orgId: string) {
-  let state: DiaryState = { events: [], rules: [], conflicts: [], staff: [], meId: meStaffId, loading: true, range: { from: '', to: '' } };
+  let requestedRange = { from: dateKey(addDays(new Date(), -40)), to: dateKey(addDays(new Date(), 75)) };
+  let refreshToken = 0;
+  let state: DiaryState = { events: [], rules: [], conflicts: [], staff: [], meId: meStaffId, loading: true, range: requestedRange };
   const listeners = new Set<() => void>();
   const bump = () => listeners.forEach((l) => l());
   const setState = (patch: Partial<DiaryState>) => { state = { ...state, ...patch }; bump(); };
@@ -565,14 +624,28 @@ function createLiveStore(meStaffId: string, orgId: string) {
   const push = (s: HistoryStep) => { history.splice(hIndex); history.push(s); hIndex = history.length; };
 
   const refresh = async () => {
-    setState({ loading: true });
+    const token = ++refreshToken;
+    const range = { ...requestedRange };
+    setState({ loading: true, error: null });
     try {
       const ids = state.staff.length ? state.staff.map((s) => s.id) : [];
-      const next = await loadLive(orgId, ids);
-      setState({ ...next, meId: meStaffId, loading: false });
-    } catch {
-      setState({ loading: false });
+      const next = await loadLive(orgId, ids, range);
+      if (token !== refreshToken) return;
+      setState({ ...next, meId: meStaffId, loading: false, error: null });
+    } catch (error) {
+      if (token !== refreshToken) return;
+      setState({ loading: false, error: error instanceof Error ? error.message : 'Unable to load the diary schedule.' });
     }
+  };
+
+  const loadRange = async (from: Date, to: Date) => {
+    const fromKey = dateKey(from);
+    const toKey = dateKey(to);
+    const next = fromKey <= toKey ? { from: fromKey, to: toKey } : { from: toKey, to: fromKey };
+    const alreadyRequested = next.from >= requestedRange.from && next.to <= requestedRange.to;
+    if (alreadyRequested && !state.error) return;
+    if (!alreadyRequested) requestedRange = next;
+    await refresh();
   };
 
   const kindValue = (kind: EventKind) => (kind === 'session' || kind === 'task' ? 'other' : kind);
@@ -581,83 +654,182 @@ function createLiveStore(meStaffId: string, orgId: string) {
     state: () => state,
     subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     loadStaff: async () => {
-      const { data } = await supabase.from('mentis_staff').select('id, display_name, roles');
-      setState({ staff: (data ?? []).map((s: AnyRow) => ({ id: s.id, name: s.display_name, roles: s.roles ?? [], initials: initialsOf(s.display_name) })) });
+      try {
+        const { data, error } = await supabase.from('mentis_staff').select('id, display_name, roles').eq('organization_id', orgId);
+        if (error) throw error;
+        setState({ staff: (data ?? []).map((s: AnyRow) => ({ id: s.id, name: s.display_name, roles: s.roles ?? [], initials: initialsOf(s.display_name) })) });
+      } catch (error) {
+        setState({ error: error instanceof Error ? error.message : 'Unable to load staff diaries.', loading: false });
+        throw error;
+      }
     },
     refresh,
+    loadRange,
     createEntry: async (draft) => {
-      const row = {
+      const rows = occurrenceDates(draft).map(({ start, end }) => ({
         organization_id: orgId, staff_id: draft.staffId,
-        starts_at: draft.start.toISOString(), ends_at: draft.end.toISOString(),
+        starts_at: start.toISOString(), ends_at: end.toISOString(), all_day: draft.allDay ?? false,
         available: !blockingKind(draft.kind), availability_type: kindValue(draft.kind),
         title: draft.title || KIND[draft.kind].label, reason: draft.notes || null,
         source_type: 'manual', visibility: draft.visibility ?? 'staff',
         recorded_by: meStaffId, created_by: meStaffId,
-      };
-      const { data, error } = await supabase.from('mentis_staff_availability').insert(row).select().single();
+      }));
+      const { data, error } = await supabase.from('mentis_staff_availability').insert(rows).select('id');
       if (error) throw error;
+      let ids = ((data ?? []) as AnyRow[]).map((row) => row.id);
       await refresh();
-      const id = (data as AnyRow).id;
-      push({ label: 'create', undo: async () => { await supabase.from('mentis_staff_availability').delete().eq('id', id); await refresh(); }, redo: async () => { await supabase.from('mentis_staff_availability').insert(row); await refresh(); } });
-      return null;
+      push({
+        label: 'create diary entry',
+        undo: async () => { if (ids.length) { const result = await supabase.from('mentis_staff_availability').delete().in('id', ids); if (result.error) throw result.error; } await refresh(); },
+        redo: async () => {
+          const result = await supabase.from('mentis_staff_availability').insert(rows).select('id');
+          if (result.error) throw result.error;
+          ids = ((result.data ?? []) as AnyRow[]).map((row) => row.id);
+          await refresh();
+        },
+      });
+      return ids[0] ? state.events.find((event) => event.id === ids[0]) ?? null : null;
     },
     updateEntry: async (id, patch) => {
-      const prevRow: AnyRow = {};
+      const sourceEvent = state.events.find((event) => event.id === id);
+      if (!sourceEvent) throw new Error('This diary entry is no longer available. Refresh the calendar and try again.');
+
+      // Planner-generated occurrences are virtual. Editing one writes a linked
+      // exception row and leaves the saved weekly rule untouched.
+      if (id.startsWith('gen:')) {
+        const originalStart = new Date(sourceEvent.start);
+        const nextStart = patch.start ?? new Date(sourceEvent.start);
+        const nextEnd = patch.end ?? new Date(sourceEvent.end);
+        const kind = patch.kind ?? sourceEvent.kind;
+        const occurrenceTime = `${String(originalStart.getHours()).padStart(2, '0')}:${String(originalStart.getMinutes()).padStart(2, '0')}:00`;
+        const row = {
+          organization_id: orgId,
+          staff_id: patch.staffId ?? sourceEvent.staffId,
+          starts_at: nextStart.toISOString(), ends_at: nextEnd.toISOString(), all_day: patch.allDay ?? sourceEvent.allDay ?? false,
+          available: !blockingKind(kind), availability_type: kindValue(kind),
+          title: patch.title ?? sourceEvent.title, reason: patch.notes ?? sourceEvent.notes ?? null,
+          source_type: 'planner', rule_id: sourceEvent.ruleId ?? null,
+          occurrence_date: dateKey(originalStart), occurrence_start_time: occurrenceTime,
+          exception_status: 'exception', visibility: patch.visibility ?? sourceEvent.visibility ?? 'staff',
+          recorded_by: meStaffId, created_by: meStaffId, updated_by: meStaffId,
+        };
+        const { data, error } = await supabase.from('mentis_staff_availability').insert(row).select('id').single();
+        if (error) throw error;
+        let exceptionId = (data as AnyRow).id as string;
+        await refresh();
+        push({
+          label: 'edit planner occurrence',
+          undo: async () => { const result = await supabase.from('mentis_staff_availability').delete().eq('id', exceptionId); if (result.error) throw result.error; await refresh(); },
+          redo: async () => {
+            const result = await supabase.from('mentis_staff_availability').insert(row).select('id').single();
+            if (result.error) throw result.error;
+            exceptionId = (result.data as AnyRow).id;
+            await refresh();
+          },
+        });
+        return;
+      }
+
+      const previous = await supabase.from('mentis_staff_availability').select('*').eq('id', id).single();
+      if (previous.error) throw previous.error;
       const row: AnyRow = {};
       if (patch.start) row.starts_at = patch.start.toISOString();
       if (patch.end) row.ends_at = patch.end.toISOString();
+      if (patch.allDay !== undefined) row.all_day = patch.allDay;
+      if (patch.visibility !== undefined) row.visibility = patch.visibility;
       if (patch.title !== undefined) row.title = patch.title;
       if (patch.notes !== undefined) row.reason = patch.notes;
       if (patch.kind) { row.availability_type = kindValue(patch.kind); row.available = !blockingKind(patch.kind); }
       if (patch.staffId) row.staff_id = patch.staffId;
       row.updated_by = meStaffId; row.updated_at = new Date().toISOString();
-      // Planner exceptions: write an exception row instead of mutating the rule.
-      if (id.startsWith('gen:')) {
-        const [, , date, hhmm] = id.split(':');
-        await supabase.from('mentis_staff_availability').insert({
-          organization_id: orgId, staff_id: patch.staffId, starts_at: patch.start!.toISOString(), ends_at: patch.end!.toISOString(),
-          available: !(patch.kind ? blockingKind(patch.kind) : true),
-          availability_type: patch.kind ? kindValue(patch.kind) : 'working_hours',
-          title: patch.title, reason: patch.notes || null, source_type: 'planner',
-          rule_id: null, occurrence_date: date, exception_status: 'exception',
-          visibility: 'staff', recorded_by: meStaffId, created_by: meStaffId,
-        });
-        await refresh();
-        return;
-      }
-      const { data } = await supabase.from('mentis_staff_availability').select('*').eq('id', id).single();
-      Object.assign(prevRow, data ?? {});
-      await supabase.from('mentis_staff_availability').update(row).eq('id', id);
+      const { error } = await supabase.from('mentis_staff_availability').update(row).eq('id', id);
+      if (error) throw error;
+      const prevRow = previous.data as AnyRow;
       await refresh();
       push({
-        label: 'edit',
-        undo: async () => { await supabase.from('mentis_staff_availability').update(prevRow).eq('id', id); await refresh(); },
-        redo: async () => { await supabase.from('mentis_staff_availability').update(row).eq('id', id); await refresh(); },
+        label: 'edit diary entry',
+        undo: async () => { const result = await supabase.from('mentis_staff_availability').update(prevRow).eq('id', id); if (result.error) throw result.error; await refresh(); },
+        redo: async () => { const result = await supabase.from('mentis_staff_availability').update(row).eq('id', id); if (result.error) throw result.error; await refresh(); },
       });
     },
     deleteEntries: async (ids) => {
+      const removedRows: AnyRow[] = [];
+      const updatedExceptions: { previous: AnyRow; marker: AnyRow }[] = [];
+      const suppressionRows: AnyRow[] = [];
+      let suppressionIds: string[] = [];
       for (const id of ids) {
         if (id.startsWith('gen:')) {
-          const [, , date, hhmm] = id.split(':');
-          const target = state.events.find((e) => e.id === id);
-          await supabase.from('mentis_staff_availability').insert({
-            organization_id: orgId, staff_id: target?.staffId, starts_at: target!.start, ends_at: new Date(new Date(target!.start).getTime() + 60000).toISOString(),
+          const target = state.events.find((event) => event.id === id);
+          if (!target) continue;
+          const originalStart = new Date(target.start);
+          const marker = {
+            organization_id: orgId, staff_id: target.staffId, starts_at: target.start,
+            ends_at: new Date(originalStart.getTime() + 60_000).toISOString(), all_day: false,
             available: false, availability_type: 'other', source_type: 'planner',
-            rule_id: target?.ruleId ?? null, occurrence_date: date, exception_status: 'exception',
-            visibility: 'private', recorded_by: meStaffId, created_by: meStaffId,
-          });
+            rule_id: target.ruleId ?? null, occurrence_date: dateKey(originalStart),
+            occurrence_start_time: `${String(originalStart.getHours()).padStart(2, '0')}:${String(originalStart.getMinutes()).padStart(2, '0')}:00`,
+            exception_status: 'exception', visibility: 'private', recorded_by: meStaffId, created_by: meStaffId,
+          };
+          const { data, error } = await supabase.from('mentis_staff_availability').insert(marker).select('id').single();
+          if (error) throw error;
+          suppressionRows.push(marker);
+          suppressionIds.push((data as AnyRow).id);
         } else {
-          await supabase.from('mentis_staff_availability').delete().eq('id', id);
+          const previous = await supabase.from('mentis_staff_availability').select('*').eq('id', id).single();
+          if (previous.error) throw previous.error;
+          const previousRow = previous.data as AnyRow;
+          if (previousRow.source_type === 'planner' && previousRow.rule_id && previousRow.occurrence_date) {
+            // Keep a private tombstone linked to the source occurrence. Deleting
+            // an edited exception must not make the generated block reappear.
+            const marker = {
+              available: false, availability_type: 'other', all_day: false,
+              visibility: 'private', updated_by: meStaffId, updated_at: new Date().toISOString(),
+            };
+            const result = await supabase.from('mentis_staff_availability').update(marker).eq('id', id);
+            if (result.error) throw result.error;
+            updatedExceptions.push({ previous: previousRow, marker });
+          } else {
+            const result = await supabase.from('mentis_staff_availability').delete().eq('id', id);
+            if (result.error) throw result.error;
+            removedRows.push(previousRow);
+          }
         }
       }
       await refresh();
+      push({
+        label: 'delete diary entry',
+        undo: async () => {
+          if (suppressionIds.length) { const result = await supabase.from('mentis_staff_availability').delete().in('id', suppressionIds); if (result.error) throw result.error; }
+          if (removedRows.length) { const result = await supabase.from('mentis_staff_availability').insert(removedRows); if (result.error) throw result.error; }
+          for (const item of updatedExceptions) {
+            const result = await supabase.from('mentis_staff_availability').update(item.previous).eq('id', item.previous.id);
+            if (result.error) throw result.error;
+          }
+          await refresh();
+        },
+        redo: async () => {
+          const idsToDelete = removedRows.map((row) => row.id);
+          if (idsToDelete.length) { const result = await supabase.from('mentis_staff_availability').delete().in('id', idsToDelete); if (result.error) throw result.error; }
+          for (const item of updatedExceptions) {
+            const result = await supabase.from('mentis_staff_availability').update(item.marker).eq('id', item.previous.id);
+            if (result.error) throw result.error;
+          }
+          if (suppressionRows.length) {
+            const result = await supabase.from('mentis_staff_availability').insert(suppressionRows).select('id');
+            if (result.error) throw result.error;
+            suppressionIds = ((result.data ?? []) as AnyRow[]).map((row) => row.id);
+          }
+          await refresh();
+        },
+      });
     },
     duplicateEntry: async (id) => {
       const src = state.events.find((e) => e.id === id);
-      if (!src || src.system) return null;
+      if (!src || (src.system && src.sourceType !== 'planner')) return null;
       await api.createEntry({
         staffId: src.staffId, title: src.title, kind: src.kind,
-        start: new Date(src.start), end: new Date(src.end), notes: src.notes ?? undefined,
+        start: new Date(src.start), end: new Date(src.end), allDay: src.allDay,
+        notes: src.notes ?? undefined, visibility: src.visibility,
       });
       return null;
     },
@@ -667,20 +839,24 @@ function createLiveStore(meStaffId: string, orgId: string) {
         pattern: draft.pattern, effective_from: draft.effectiveFrom, effective_to: draft.effectiveTo,
         scope: draft.scope, is_active: true, created_by: meStaffId,
       };
-      if (draft.id) await supabase.from('mentis_availability_rules').update(row).eq('id', draft.id);
-      else await supabase.from('mentis_availability_rules').insert(row);
+      const result = draft.id
+        ? await supabase.from('mentis_availability_rules').update({ ...row, updated_by: meStaffId, updated_at: new Date().toISOString() }).eq('id', draft.id)
+        : await supabase.from('mentis_availability_rules').insert(row);
+      if (result.error) throw result.error;
       await refresh();
       return 'saved' as const;
     },
     deleteRule: async (id) => {
-      await supabase.from('mentis_availability_rules').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', id);
+      const result = await supabase.from('mentis_availability_rules').update({ is_active: false, updated_by: meStaffId, updated_at: new Date().toISOString() }).eq('id', id);
+      if (result.error) throw result.error;
       await refresh();
     },
     setConflictStatus: async (id, status) => {
       const row: AnyRow = { status };
       if (status === 'resolved') { row.resolved_by = meStaffId; row.resolved_at = new Date().toISOString(); }
       else { row.acknowledged_by = meStaffId; row.acknowledged_at = new Date().toISOString(); }
-      await supabase.from('mentis_diary_conflicts').update(row).eq('id', id);
+      const result = await supabase.from('mentis_diary_conflicts').update(row).eq('id', id);
+      if (result.error) throw result.error;
       await refresh();
     },
     undo: async () => { if (hIndex > 0) { hIndex -= 1; await history[hIndex].undo(); } },
@@ -706,7 +882,7 @@ export function useDiaryData(): DiaryApi {
   const { staff } = useAuth();
   const isDemo = demoEnabled || isDemoSession();
   const adapterRef = useRef<{ key: string; api: any } | null>(null);
-  const [, forceTick] = useState(0);
+  const [tick, forceTick] = useState(0);
 
   const key = isDemo ? 'demo' : `${staff?.id ?? ''}|${staff?.organization_id ?? ''}`;
   if (!adapterRef.current || adapterRef.current.key !== key) {
@@ -725,17 +901,30 @@ export function useDiaryData(): DiaryApi {
     return () => unsub?.();
   }, [adapter]);
 
-  // Load staff list once (live mode).
+  // Prime live adapters in order: visible staff first, then diary entries for
+  // those staff IDs. The demo adapter is already seeded in memory.
   useEffect(() => {
-    if (adapter?.loadStaff && !adapter.state().staff.length) void adapter.loadStaff();
+    if (!adapter) return;
+    let cancelled = false;
+    const bootstrap = async () => {
+      try {
+        if (adapter.loadStaff && !adapter.state().staff.length) await adapter.loadStaff();
+        if (!cancelled) await adapter.refresh();
+      } catch {
+        // The adapter publishes a useful error state for the page to render.
+      }
+    };
+    void bootstrap();
+    return () => { cancelled = true; };
   }, [adapter]);
 
   const state: DiaryState = useMemo(() => (adapter ? adapter.state() : {
     events: [], rules: [], conflicts: [], staff: [], meId: staff?.id ?? '', loading: true, range: { from: '', to: '' },
-  }), [adapter, adapter?.version]);
+  }), [adapter, adapter?.version, tick]);
 
   const ops = useMemo<DiaryOps>(() => ({
     refresh: async () => adapter?.refresh(),
+    loadRange: async (from, to) => adapter?.loadRange?.(from, to),
     createEntry: async (d) => (adapter ? adapter.createEntry(d) : null),
     updateEntry: async (id, p) => adapter?.updateEntry(id, p),
     deleteEntries: async (ids) => adapter?.deleteEntries(ids),

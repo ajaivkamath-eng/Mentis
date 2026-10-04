@@ -40,12 +40,13 @@ export function LegendBar({ className, kinds }: { className?: string; kinds?: (k
 }
 
 export function ConflictStrip({
-  conflicts, onAcknowledge, onResolve, onJump,
+  conflicts, onAcknowledge, onResolve, onJump, canManage = () => true,
 }: {
   conflicts: ConflictRecord[];
   onAcknowledge: (c: ConflictRecord) => void;
   onResolve: (c: ConflictRecord) => void;
   onJump: (c: ConflictRecord) => void;
+  canManage?: (c: ConflictRecord) => boolean;
 }) {
   if (conflicts.length === 0) return null;
   return (
@@ -70,11 +71,13 @@ export function ConflictStrip({
               </span>
             </div>
             <p className="mt-1 text-ink">{c.message}</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              <Button intent="secondary" size="sm" onClick={() => onJump(c)}><Link2 className="size-3.5" />Resolve / reassign</Button>
-              {c.status !== 'acknowledged' && <Button intent="ghost" size="sm" onClick={() => onAcknowledge(c)}><EyeOff className="size-3.5" />Acknowledge</Button>}
-              <Button intent="primary" size="sm" onClick={() => onResolve(c)}><Check className="size-3.5" />Mark resolved</Button>
-            </div>
+            {canManage(c) ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <Button intent="secondary" size="sm" onClick={() => onJump(c)}><Link2 className="size-3.5" />Resolve / reassign</Button>
+                {c.status !== 'acknowledged' && <Button intent="ghost" size="sm" onClick={() => onAcknowledge(c)}><EyeOff className="size-3.5" />Acknowledge</Button>}
+                <Button intent="primary" size="sm" onClick={() => onResolve(c)}><Check className="size-3.5" />Mark resolved</Button>
+              </div>
+            ) : <p className="mt-1.5 text-[10px] text-ink-faint">You can view this conflict; only an authorised diary manager can resolve it.</p>}
           </li>
         ))}
       </ul>
